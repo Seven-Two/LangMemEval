@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langmem-eval"
+version = "0.1.0"
+description = "Editable LangMem and MemEval integration"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["langmem==0.0.30", "agents-memory", "huggingface-hub"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+langmem-eval = "langmem_eval.cli:main"
+
+[tool.uv.sources]
+agents-memory = { path = "../MemEval", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/langmem_eval"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

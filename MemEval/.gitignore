@@ -1,0 +1,36 @@
+# Data and models (large files)
+data/
+models/
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated database files
+lancedb_data/
+*.db
+
+# OS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Claude Code
+.claude/
+
+# Drafts
+medium.md
+
+# Environment
+.env
