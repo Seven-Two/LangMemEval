@@ -31,10 +31,23 @@ uv run langmem-eval --systems langmem --benchmark locomo --num-samples 1 --llm-m
 
 根目录 `.env` 可填写 `OPENAI_API_KEY=...`，入口会自动加载，已有环境变量优先。
 额外 baseline 按需安装，例如 `uv sync --extra dev --extra mem0`。
-可选组：`mem0`、`simplemem`、`graphiti`、`memu`、`charts`、`training`。
+可选组：`amem`、`mem0`、`simplemem`、`graphiti`、`memu`、`charts`、`training`。
 这些组已纳入统一依赖解析，但未逐个运行；默认安装仅验证 LangMem 评测流程。
 
 ## 目录与开发
+
+### A-Mem baseline
+
+已接入固定上游版本的 A-Mem 核心方法：笔记生成、链接、邻居演化和关键词检索，
+使用本框架统一回答协议。配置 `.env` 中的 `LLM_MODEL`、聊天 API 和 embedding 后运行：
+
+```powershell
+uv sync --locked --extra dev --extra amem
+uv run --extra amem langmem-eval --systems amem --data-file examples/amem_smoke.json --num-samples 1 --top-k 10 --skip-judge --output-dir results/amem-smoke
+```
+
+上述命令会调用真实模型。配置千问兼容服务、API embedding、离线验收与复现差异见
+[A-Mem 使用指南](docs/amem.md)。未运行论文规模实验，不声称复现论文分数。
 
 AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 安装 `uv sync --extra dev --extra aml`，配置 `.env` 后运行 `uv run langmem-aml`。
@@ -67,3 +80,6 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 本地修改了系统发现、实验协议、失败记录和成本统计，并统一了源码与运行时路径。
 上游原始说明和示例结果保留在 `third_party/memeval/`，不代表本项目实测结果。
 LangMem 作为依赖使用，来源 https://github.com/langchain-ai/langmem。
+
+A-Mem 提示词和算法来源为 [WujiangXu/A-mem](https://github.com/WujiangXu/A-mem)，
+固定提交、适配说明和 MIT 许可证见 [来源记录](third_party/amem/README.md)。

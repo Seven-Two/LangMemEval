@@ -1,0 +1,20 @@
+[
+  {
+    "sample_id": "amem-smoke-1",
+    "conversation": {
+      "session_1_date_time": "2025-01-01",
+      "session_1": [
+        {"speaker": "Alice", "text": "I live in Berlin.", "dia_id": "s1:1"},
+        {"speaker": "Bob", "text": "My favorite drink is coffee.", "dia_id": "s1:2"}
+      ],
+      "session_2_date_time": "2025-02-01",
+      "session_2": [
+        {"speaker": "Alice", "text": "I moved from Berlin to Shanghai today.", "dia_id": "s2:1"}
+      ]
+    },
+    "qa": [
+      {"question": "Where does Alice live now?", "answer": "Shanghai", "category": 1},
+      {"question": "What is Bob's favorite drink?", "answer": "coffee", "category": 1}
+    ]
+  }
+]
