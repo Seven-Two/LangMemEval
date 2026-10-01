@@ -146,6 +146,7 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 - `src/langmem_eval/_amem_prompts.py`：固定上游提示词和 schema。
 - `src/langmem_eval/methods/amem.py`：方法注册入口。
 - `src/langmem_eval/adapter.py`：统一回答和 trace。
+- `src/langmem_eval/evaluation.py`：同步逐题评分，沿用框架评分函数与结果字段；无需异步事件循环。
 
 `AMemBackend.snapshot()` 可用于 Python 调试笔记内容；目前不自动将完整笔记库写入结果文件，
 检索上下文和实际回答请求会保存。进一步实现新方法时，保留 `amem` baseline，

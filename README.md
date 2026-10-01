@@ -78,6 +78,7 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 基础提交 `807ae6d7d8a5b76f6fe964d5a581d96c036e2ac4`，遵循其
 [Apache-2.0 LICENSE](third_party/memeval/LICENSE) 与 [NOTICE](third_party/memeval/NOTICE)。
 本地修改了系统发现、实验协议、失败记录和成本统计，并统一了源码与运行时路径。
+`src/langmem_eval/evaluation.py` 同样从 MemEval 评分流程改编，沿用 Apache-2.0。
 上游原始说明和示例结果保留在 `third_party/memeval/`，不代表本项目实测结果。
 LangMem 作为依赖使用，来源 https://github.com/langchain-ai/langmem。
 

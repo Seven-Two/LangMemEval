@@ -115,3 +115,30 @@ def test_distribution_contains_amem_and_license():
                      "langmem_eval/methods/amem.py", "langmem_eval/model_api.py"):
             assert name in archive.namelist()
         assert archive.read("langmem_eval/AMEM_LICENSE") == (root / "third_party/amem/LICENSE").read_bytes()
+
+
+def test_sync_evaluation_failure_trace_and_judge_accounting(monkeypatch):
+    from langmem_eval.evaluation import evaluate_questions
+    from agents_memory.systems import _helpers as scoring
+    from agents_memory.usage import reset, get_report, record_external_usage
+    conv = {"sample_id": "test", "qa": [
+        {"question": "fail", "answer": "", "category": 1},
+        {"question": "pass", "answer": "Berlin", "category": 1}]}
+    def answer(question):
+        answer.trace = {"failure_stage": "retrieve" if question == "fail" else None}
+        if question == "fail":
+            raise ValueError("offline error")
+        return "Berlin"
+    def judge(*args, **kwargs):
+        record_external_usage(provider="offline", model="judge", prompt_tokens=1, completion_tokens=1)
+        raise RuntimeError("offline judge error")
+    monkeypatch.setattr(scoring, "evaluate_longmemeval", judge)
+    reset()
+    rows = evaluate_questions(conv, answer, True, judge_fn="longmemeval")
+    assert rows[0]["f1"] == 0 and rows[0]["error"]["stage"] == "retrieve"
+    assert rows[0]["judge_status"] == "not_run"
+    assert rows[1]["answer_status"] == "ok" and rows[1]["judge_status"] == "error"
+    assert rows[1]["status"] == "error" and rows[1]["f1"] == 1
+    assert rows[0]["answer_trace"]["failure_stage"] == "retrieve"  # copied per question
+    assert get_report()["judge"]["calls"] == 1
+    assert get_report()["method"]["calls"] == 0

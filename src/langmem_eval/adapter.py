@@ -6,7 +6,7 @@ def run(conv, llm_model, run_judge, category_names=None, judge_fn=None):
 
 def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn=None):
     from openai import OpenAI
-    from agents_memory.systems._helpers import _qa_results
+    from langmem_eval.evaluation import evaluate_questions
     from agents_memory.token_tracker import phase
     from langmem_eval.benchmark import build_memory, select_context
     from langmem_eval.protocol import AnswerProtocol
@@ -50,5 +50,5 @@ def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn
                             finish_reason=getattr(response.choices[0], "finish_reason", None))
         return content
 
-    return _qa_results(conv, answer, run_judge,
+    return evaluate_questions(conv, answer, run_judge,
                        category_names=category_names, judge_fn=judge_fn)
