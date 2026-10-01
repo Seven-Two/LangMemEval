@@ -65,7 +65,7 @@ SQLite 保存每个用户的完整记忆快照、原始 Add 请求、已完成�
 - `snapshot() -> JSON可序列化对象`：包含下一次请求恢复所需的全部算法状态。
 
 可继承 AMLLangMemBackend 修改 add/search，再注册 aml_factory；参考
-`src/langmem_eval/methods/langmem.py`。本地 ingest/retrieve 接口仍保留。
+`src/langmem_eval/methods/langmem/__init__.py`。本地 ingest/retrieve 接口仍保留。
 自定义方法不能在事务外提交状态或写入其他用户空间，否则破坏重试及隔离保证。
 
 ## 容量边界与尚未完成的验证

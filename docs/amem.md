@@ -142,9 +142,12 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 
 代码位置：
 
-- `src/langmem_eval/amem.py`：设置、笔记结构、写入演化、检索、embedding/LLM 边界。
-- `src/langmem_eval/_amem_prompts.py`：固定上游提示词和 schema。
-- `src/langmem_eval/methods/amem.py`：方法注册入口。
+- `src/langmem_eval/methods/amem/backend.py`：写入演化与检索算法。
+- `src/langmem_eval/methods/amem/config.py`：设置和公开配置记录。
+- `src/langmem_eval/methods/amem/memory.py`：笔记结构与序列化。
+- `src/langmem_eval/methods/amem/clients.py`：embedding/LLM 边界。
+- `src/langmem_eval/methods/amem/prompts.py`：固定上游提示词和 schema。
+- `src/langmem_eval/methods/amem/__init__.py`：方法注册入口。
 - `src/langmem_eval/adapter.py`：统一回答和 trace。
 - `src/langmem_eval/evaluation.py`：同步逐题评分，沿用框架评分函数与结果字段；无需异步事件循环。
 

@@ -57,7 +57,8 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 - `tests/`：测试；根目录 pyproject.toml 与 uv.lock 统一管理依赖。
 - `scripts/`：抽样工具及兼容运行入口，实验主体在 `agents_memory.runner`。
 - `third_party/memeval/`：上游许可证、来源文档与示例图，不是第二套运行项目。
-- 新方法写在 `src/langmem_eval/methods/`，无需复制适配器。
+- 每个方法集中在 `src/langmem_eval/methods/<方法名>/`，包含注册、算法及所需配置/提示词。
+- `src/langmem_eval/interfaces.py` 定义共享接口；`examples/method_template/` 可复制为新方法起点。
 
 详见 [使用与注册新方法](docs/development.md)。单个项目采用可编辑安装；
 修改代码后重启评测即可，所有命令均在仓库根目录运行。

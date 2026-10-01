@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Callable
 
-from .benchmark import MemoryBackend
+from .interfaces import MemoryBackend
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ def register_method(name: str, *, architecture: str, infrastructure: str = "cust
 
 
 def discover_methods():
+    """Import public modules or package __init__ files, never recurse into internals."""
     from . import methods
     for module in sorted(pkgutil.iter_modules(methods.__path__), key=lambda m: m.name):
         if not module.name.startswith("_"):

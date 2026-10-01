@@ -7,7 +7,8 @@ import zipfile
 import numpy as np
 import pytest
 
-from langmem_eval.amem import AMemSettings, OpenAIController, LocalEmbedder
+from langmem_eval.methods.amem.config import AMemSettings
+from langmem_eval.methods.amem.clients import OpenAIController, LocalEmbedder
 from langmem_eval.model_api import validate_base_url, llm_extra_body
 from test_amem_contract import backend, analysis, decision, session
 
@@ -88,14 +89,14 @@ def test_bad_embedding_rolls_back_neighbor_updates_and_new_note(bad):
 
 
 def test_local_embedding_records_unknown_cost_without_loading_weights(monkeypatch):
-    from langmem_eval import amem
+    from langmem_eval.methods.amem import clients
     from agents_memory.usage import reset, phase, get_report
     calls = []
     class FakeModel:
         def encode(self, texts, **kwargs):
             calls.append((texts, kwargs))
             return np.array([[1., 0.] for _ in texts])
-    monkeypatch.setattr(amem, "_load_local_model", lambda *args: FakeModel())
+    monkeypatch.setattr(clients, "_load_local_model", lambda *args: FakeModel())
     reset()
     with phase("write"):
         vectors = LocalEmbedder(AMemSettings()).encode(["test"])
@@ -112,7 +113,11 @@ def test_distribution_contains_amem_and_license():
         pytest.skip("Build the distribution before testing wheel contents")
     with zipfile.ZipFile(max(wheels, key=lambda p: p.stat().st_mtime)) as archive:
         for name in ("langmem_eval/amem.py", "langmem_eval/_amem_prompts.py",
-                     "langmem_eval/methods/amem.py", "langmem_eval/model_api.py"):
+                     "langmem_eval/methods/amem/__init__.py", "langmem_eval/model_api.py",
+                     "langmem_eval/methods/amem/backend.py", "langmem_eval/methods/amem/config.py",
+                     "langmem_eval/methods/amem/clients.py", "langmem_eval/methods/amem/memory.py",
+                     "langmem_eval/methods/amem/prompts.py", "langmem_eval/interfaces.py",
+                     "langmem_eval/methods/langmem/__init__.py", "langmem_eval/methods/langmem/backend.py"):
             assert name in archive.namelist()
         assert archive.read("langmem_eval/AMEM_LICENSE") == (root / "third_party/amem/LICENSE").read_bytes()
 

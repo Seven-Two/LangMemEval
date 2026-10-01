@@ -5,14 +5,7 @@ import json
 import re
 from dataclasses import dataclass, asdict
 from functools import lru_cache
-from typing import Protocol
-
-
-@dataclass(frozen=True)
-class Session:
-    id: str
-    date: str
-    messages: list[dict[str, str]]
+from .interfaces import MemoryBackend, Session  # Re-export for existing callers.
 
 
 def extract_sessions(conv: dict) -> list[Session]:
@@ -34,11 +27,6 @@ def extract_sessions(conv: dict) -> list[Session]:
     if not sessions:
         raise ValueError("No session_N history found; provide MemEval-normalized data")
     return sessions
-
-
-class MemoryBackend(Protocol):
-    def ingest(self, session: Session) -> None: ...
-    def retrieve(self, query: str, limit: int) -> list[str]: ...
 
 
 def build_memory(conv: dict, backend: MemoryBackend) -> None:

@@ -8,7 +8,7 @@ pytest.importorskip("agents_memory")
 
 def test_registered_plugin_and_real_scoring(monkeypatch):
     import openai
-    import langmem_eval.backend
+    import langmem_eval.methods.langmem.backend
     from agents_memory.systems import SYSTEMS
     from langmem_eval.adapter import run
 
@@ -32,7 +32,7 @@ def test_registered_plugin_and_real_scoring(monkeypatch):
             return SimpleNamespace(choices=[SimpleNamespace(
                 message=SimpleNamespace(content="Berlin"))])
 
-    monkeypatch.setattr(langmem_eval.backend, "LangMemBackend", Backend)
+    monkeypatch.setattr(langmem_eval.methods.langmem.backend, "LangMemBackend", Backend)
     monkeypatch.setattr(openai, "OpenAI", Client)
     conv = {"sample_id": "offline", "conversation": {
         "session_1": [{"speaker": "Alice", "text": "I live in Berlin"}]

@@ -1,7 +1,7 @@
 # LangMem + MemEval
 
-中性的记忆评测整合工程。LangMem 负责记忆抽取、更新和检索；MemEval
-负责数据加载、评分和结果输出。本工程不引入额外研究方法。
+用于实现、复现和比较记忆方法的整合工程。LangMem 和 A-Mem 作为独立方法接入；
+MemEval 提供数据加载、评分和结果输出。统一适配器负责对齐回答协议与证据预算。
 
 ## 开始使用
 
@@ -21,8 +21,12 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 
 ## 开发入口
 
-- `src/langmem_eval/backend.py`：LangMem API、向量存储与检索。
-- `src/langmem_eval/benchmark.py`：归一化会话转换、上下文预算、后端协议。
+- `src/langmem_eval/interfaces.py`：所有方法共享的 `Session` 和 `MemoryBackend` 接口。
+- `src/langmem_eval/methods/`：每个方法的独立子包，包含注册入口和具体实现。
+- `src/langmem_eval/methods/langmem/backend.py`：LangMem API、向量存储与检索。
+- `src/langmem_eval/methods/amem/backend.py`：A-Mem 记忆构建、演化和检索。
+- `src/langmem_eval/benchmark.py`：归一化会话转换和上下文预算。
+- `src/langmem_eval/model_api.py`：共享的 API 地址校验和请求附加选项。
 - `src/langmem_eval/adapter.py`：唯一的评测适配器实现。
 - `src/langmem_eval/cli.py`：调用 `agents_memory.runner.main` 的统一入口。
 - `src/agents_memory/runner.py`：实验清单、执行、结果落盘与汇总。
@@ -44,22 +48,75 @@ LangMem 使用固定版本依赖，不复制第三方源码。依赖解析记录
 如需修改 LangMem 本身，可将其源码克隆到本地，并在 tool.uv.sources 中指定
 editable 路径后重新 uv sync。当前优先通过 backend 中的接口组合进行扩展。
 
+## 方法目录约定
+
+```text
+src/langmem_eval/
+├── interfaces.py           # Session、MemoryBackend：方法与框架之间的契约
+├── registry.py             # 方法发现和创建
+├── adapter.py              # 共享评测流程
+├── benchmark.py            # 输入归一化、完整证据预算选择
+├── protocol.py             # 回答协议
+├── evaluation.py           # 逐题评分与失败记录
+├── model_api.py            # 跨方法通用的 API 校验
+└── methods/
+    ├── amem/
+    │   ├── __init__.py     # 只注册工厂，延迟导入 backend
+    │   ├── backend.py      # ingest、演化、retrieve 算法
+    │   ├── config.py       # AMemSettings、环境变量
+    │   ├── memory.py       # Note 数据结构及序列化
+    │   ├── prompts.py      # 固定上游提示词、输出 schema
+    │   └── clients.py      # A-Mem 的 LLM/embedding 接口
+    └── langmem/
+        ├── __init__.py
+        └── backend.py
+```
+
+按复杂度添加文件，小方法不需要空的 config/prompts/clients 文件。
+方法专用设置留在方法内；已跨方法复用的基础能力才移到共享模块。
+框架应通过注册接口调用方法，方法实现不应依赖其他 baseline 的私有内部结构。
+AML 持久化服务仍在 `aml/`，与离线样本生命周期不同。
+
+旧 `langmem_eval.amem`、`langmem_eval.backend` 和 `_amem_prompts` 只保留导入兼容层，
+不再包含算法副本。新代码使用 `methods.<name>.*`；`benchmark.Session/MemoryBackend`
+也继续兼容，推荐从 `interfaces` 导入。
+
 ## 注册新方法
 
 查看可用方法：`uv run langmem-eval --list-methods`。
-在 `src/langmem_eval/methods/my_method.py` 中添加：
+推荐复制仓库中的可运行模板（目标目录尚不存在时）：
+
+```powershell
+Copy-Item -LiteralPath examples/method_template -Destination src/langmem_eval/methods/my_method -Recurse
+```
+
+模板仅返回最近的历史发言，用于熟悉接口；不是论文 baseline。
+保留在 examples 下时不会自动注册。复制后将方法名、类名和逻辑改为自己的实现。
+
+`src/langmem_eval/methods/my_method/__init__.py`：
 
 ```python
-from ..registry import register_method
-from ..backend import LangMemBackend
+from langmem_eval.registry import register_method
 
-@register_method("my_method", architecture="描述你的算法", infrastructure="LangMem")
-class MyMethod(LangMemBackend):
-    def retrieve(self, query: str, limit: int) -> list[str]:
-        candidates = super().retrieve(query, limit * 3)
-        # 在这里实现你的重排序或记忆选择；此示例尚无创新算法。
-        return candidates[:limit]
+@register_method("my_method", architecture="描述你的算法", infrastructure="描述依赖")
+def create(model):
+    from .backend import MyMethodBackend
+    return MyMethodBackend(model)
 ```
+
+在同目录 `backend.py` 实现 `MyMethodBackend`，以 [模板](../examples/method_template/backend.py)
+为起点。接口约定如下：
+
+| 接口 | 责任 |
+| --- | --- |
+| `__init__(model)` | 创建当前对话专属状态；模型/API 初始化在这里或延迟执行 |
+| `ingest(session)` | 同步完成历史写入；session.messages 是包含 speaker/text/date/source_id 的 JSON 消息 |
+| `retrieve(query, limit)` | 返回按相关性排序、不超过 limit 个完整证据字符串，供共享适配器选择 |
+| `describe()`（可选） | 返回可 JSON 序列化的方法版本、参数等审计信息，排除密钥 |
+| `last_retrieval`（可选） | 保存本次检索的可 JSON 序列化 trace，适配器逐题复制 |
+
+只需实现接口，无需继承某个 baseline。参考答案不传入方法，失败应抛出异常交给框架记录。
+输出字符串可以是一条记忆或明确声明的一组证据；预算选择会整体保留或舍弃该字符串。
 
 然后运行：
 
@@ -67,7 +124,8 @@ class MyMethod(LangMemBackend):
 uv run langmem-eval --systems langmem,my_method --num-samples 1 --skip-judge --output-dir results/comparison
 ```
 
-每次启动自动发现 methods 下非下划线开头的模块，无需修改 MemEval 或复制代码。
+每次启动自动发现 methods 下非下划线开头的模块和子包，只导入子包的 `__init__.py`，
+不递归扫描其 backend/config/prompts；旧的单文件注册仍支持。无需修改 registry 或 MemEval。
 装饰器也可注册工厂函数，接受一个 model 参数并返回实现 ingest(session)、
 retrieve(query, limit) 的对象；每个样本都会重新创建对象。
 模块顶层只做定义与注册，模型初始化和可选依赖导入放进工厂/构造器。
