@@ -7,3 +7,9 @@
 !**/.env.example
 **/results/
 **/data/
+dist/
+**/models/
+**/build/
+**/*.egg-info/
+**/lancedb_data/
+**/*.db
