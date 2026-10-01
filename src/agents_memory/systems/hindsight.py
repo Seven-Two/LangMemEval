@@ -22,7 +22,7 @@ from openai import OpenAI
 
 from agents_memory.locomo import extract_dialogues
 from agents_memory.systems._helpers import _qa_results_async, run_async
-from agents_memory.token_tracker import record_external_usage
+from agents_memory.usage import record_external_usage
 
 
 def _parse_timestamp(ts: str) -> str | None:

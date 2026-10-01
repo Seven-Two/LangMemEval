@@ -12,7 +12,7 @@ from copy import deepcopy
 
 def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn=None):
     from agents_memory.systems import _helpers as scoring
-    from agents_memory.token_tracker import phase
+    from agents_memory.usage import phase
 
     cats = category_names or scoring._DEFAULT_CATEGORIES
     sample_id = conv.get("sample_id", "unknown")

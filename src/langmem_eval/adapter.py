@@ -1,13 +1,9 @@
 """Single source of truth for the LangMem/MemEval experiment adapter."""
 
-def run(conv, llm_model, run_judge, category_names=None, judge_fn=None):
-    return run_method("langmem", conv, llm_model, run_judge, category_names, judge_fn)
-
-
 def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn=None):
     from openai import OpenAI
     from langmem_eval.evaluation import evaluate_questions
-    from agents_memory.token_tracker import phase
+    from agents_memory.usage import phase
     from langmem_eval.benchmark import build_memory, select_context
     from langmem_eval.protocol import AnswerProtocol
     from langmem_eval.registry import create_backend

@@ -18,13 +18,10 @@ from agents_memory.benchmarks import BENCHMARKS
 from agents_memory.locomo import CATEGORY_NAMES
 from agents_memory.systems import SYSTEMS
 from agents_memory.experiment import compute_summary, failed_results, freeze_manifest, normalize_results
-from agents_memory.token_tracker import get_report, get_stats, get_stats_by_model, reset, start
+from agents_memory.usage import get_report, get_stats, get_stats_by_model, reset, start
 from agents_memory.paths import results_dir
 from langmem_eval.protocol import AnswerProtocol
 from langmem_eval.registry import discover_methods
-
-_compute_summary = compute_summary
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)

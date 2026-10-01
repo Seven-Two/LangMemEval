@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agents_memory.locomo import extract_dialogues
 from agents_memory.systems._helpers import _qa_results
-from agents_memory.token_tracker import record_external_usage
+from agents_memory.usage import record_external_usage
 from agents_memory.paths import models_dir
 from agents_memory.training.memory_r1.prompts import ANSWER_AGENT_PROMPT, MEMORY_MANAGER_PROMPT
 from agents_memory.training.memory_r1.rewards import (

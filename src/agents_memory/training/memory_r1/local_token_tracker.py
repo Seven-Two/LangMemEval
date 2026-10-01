@@ -1,6 +1,6 @@
 """Track token consumption during local model training/inference.
 
-Unlike the main token_tracker (which monkey-patches the OpenAI client for API-based
+Unlike the main usage tracker (which monkey-patches the OpenAI client for API-based
 systems), this tracker is for local/open-source models where tokens are counted
 directly from the tokenizer.
 """

@@ -5,7 +5,7 @@ import os
 import re
 
 from openai import OpenAI
-from agents_memory.token_tracker import phase
+from agents_memory.usage import phase
 
 JUDGE_PROMPT = """You are evaluating a memory retrieval system.
 

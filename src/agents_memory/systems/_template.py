@@ -1,7 +1,7 @@
 """<System Name>: <one-line description>.
 
 Copy this file, rename it, fill in the three sections below.
-Run: uv run python scripts/run_full_benchmark.py --systems <filename> --num-samples 1 --skip-judge
+Run: uv run langmem-eval --systems <filename> --num-samples 1 --skip-judge
 """
 
 import os

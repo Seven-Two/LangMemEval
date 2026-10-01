@@ -5,10 +5,10 @@ import json
 import re
 from dataclasses import dataclass, asdict
 from functools import lru_cache
-from .interfaces import MemoryBackend, Session  # Re-export for existing callers.
+from . import interfaces
 
 
-def extract_sessions(conv: dict) -> list[Session]:
+def extract_sessions(conv: dict) -> list[interfaces.Session]:
     history = conv["conversation"]
     keys = sorted(
         (k for k in history if re.fullmatch(r"session_\d+", k)),
@@ -23,13 +23,13 @@ def extract_sessions(conv: dict) -> list[Session]:
             payload = {"speaker": turn["speaker"], "text": turn["text"],
                        "date": date, "source_id": str(turn.get("dia_id", f"{key}:{i}"))}
             messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
-        sessions.append(Session(key, date, messages))
+        sessions.append(interfaces.Session(key, date, messages))
     if not sessions:
         raise ValueError("No session_N history found; provide MemEval-normalized data")
     return sessions
 
 
-def build_memory(conv: dict, backend: MemoryBackend) -> None:
+def build_memory(conv: dict, backend: interfaces.MemoryBackend) -> None:
     for session in extract_sessions(conv):
         backend.ingest(session)
 
@@ -80,7 +80,7 @@ def select_context(records: list[str], *, max_tokens: int,
     return ContextSelection(context, count, tokenizer, max_tokens, selected, dropped, len(records))
 
 
-def memory_context(backend: MemoryBackend, query: str, *, top_k: int,
+def memory_context(backend: interfaces.MemoryBackend, query: str, *, top_k: int,
                    max_tokens: int, tokenizer: str = "cl100k_base") -> str:
     if top_k < 1:
         raise ValueError("top_k must be positive")

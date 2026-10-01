@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 
-from agents_memory.token_tracker import phase
+from agents_memory.usage import phase
 
 from agents_memory.evaluation import (
     compute_f1,

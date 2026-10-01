@@ -36,7 +36,7 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 根目录的单个项目同时打包 langmem_eval 与 agents_memory，通过 uv 可编辑安装。修改上述源码，重新启动评测即可；无需复制。
 两者源码均在根目录 `src/` 下。从旧目录布局更新后先执行
 `uv sync --locked --extra dev`（赛事服务再加 `--extra aml`）刷新安装路径。
-`scripts/run_full_benchmark.py` 仅保留兼容入口，运行逻辑只有包内的一份。
+评测统一使用 `uv run langmem-eval`；不再保留旧脚本运行入口。
 上游文档、许可证和历史示例图归档到 `third_party/memeval/`；其中配置示例不自动生效。
 
 数据默认写到当前工作目录 `data/`，训练模型到 `models/`，实验结果到 `results/`。
@@ -77,9 +77,9 @@ src/langmem_eval/
 框架应通过注册接口调用方法，方法实现不应依赖其他 baseline 的私有内部结构。
 AML 持久化服务仍在 `aml/`，与离线样本生命周期不同。
 
-旧 `langmem_eval.amem`、`langmem_eval.backend` 和 `_amem_prompts` 只保留导入兼容层，
-不再包含算法副本。新代码使用 `methods.<name>.*`；`benchmark.Session/MemoryBackend`
-也继续兼容，推荐从 `interfaces` 导入。
+所有方法统一从 `langmem_eval.methods.<name>.*` 导入；`Session` 和 `MemoryBackend`
+从 `langmem_eval.interfaces` 导入；成本统计从 `agents_memory.usage` 导入。
+旧模块、转发导入和旧函数别名已删除，不再提供兼容入口。
 
 ## 注册新方法
 
@@ -204,7 +204,7 @@ SDK 内部重试不分别计数；其他供应商、远程服务、本地推理�
 新适配器可用以下接口补充未被自动观察的调用，已被 SDK 记录的调用不要重复上报：
 
 ```python
-from agents_memory.token_tracker import phase, record_external_usage
+from agents_memory.usage import phase, record_external_usage
 
 with phase("retrieve"):
     response = external_service.search(query)

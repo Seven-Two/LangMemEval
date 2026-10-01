@@ -93,7 +93,7 @@ Output: RL adapters in `models/memory-r1-rl/`.
 
 ```bash
 # Requires trained adapters in models/
-uv run python scripts/run_full_benchmark.py --systems memory_r1 --num-samples 1
+uv run langmem-eval --systems memory_r1 --num-samples 1
 ```
 
 ## Training Data Split

@@ -55,9 +55,9 @@ def create_backend(name: str, model: str) -> MemoryBackend:
 
 
 def system_entries():
-    from .adapter import run, run_method
+    from .adapter import run_method
     return {
         name: {"architecture": spec.architecture, "infrastructure": spec.infrastructure,
-               "fn": run if name == "langmem" else partial(run_method, name)}
+               "fn": partial(run_method, name)}
         for name, spec in discover_methods().items()
     }
