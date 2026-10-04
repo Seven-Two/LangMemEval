@@ -149,6 +149,7 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 | 证据选择 | 整组放入或舍弃，不字符截断；大组可能被跳过；不同组内重复笔记保留 |
 | 链接计数 | 修复上游关联展开中可能返回 k+1 条的边界问题，最多 k 条 |
 | 链接身份 | 将合法的邻居索引映射为稳定笔记 UUID，拒绝越界及非候选邻居 |
+| 邻居更新长度 | 与固定上游一致：按候选邻居顺序更新 `min(邻居数, 返回标签条数)` 条；忽略多余条目，缺少 context 时保留旧值；长度不匹配写入日志 |
 | 失败处理 | 非法 JSON、截断响应、非法向量显式失败；一条笔记更新原子提交，整段对话失败保留题目分母 |
 | 索引重建 | 重用相同 embedding 实例、批量重编码，省略重建前会被丢弃的新笔记单独编码；不重载模型 |
 | 模型接口 | OpenAI 兼容聊天；可选远程 embedding；并非移植上游所有 Ollama/sglang 控制器 |
@@ -158,6 +159,27 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 `AMEM_MAX_OUTPUT_TOKENS=1000` 是默认记忆配置。
 `EVAL_TEMPERATURE` / `--answer-temperature` 和 `EVAL_MAX_OUTPUT_TOKENS` / `--max-output-tokens`
 单独控制最终回答。更改参数需记录为实验配置，尤其不要将记忆生成预算与回答预算混为一谈。
+
+### 邻居更新列表超过候选数
+
+固定上游 `memory_layer.py:844–858` 使用 `min(len(indices), len(new_tags_neighborhood))`
+限制更新循环，并不会因为数组过长而终止整段对话。当前已恢复此行为：
+
+- 给出 5 个邻居、返回 7 组标签时，只按候选顺序使用前 5 组标签及可用的对应 context。
+- 只返回 3 组标签时，只更新前 3 个邻居；其他邻居保持原状。
+- 某个已更新邻居没有对应的新 context 时，保留其旧 context；多余的 context 不使用。
+- 没有邻居时，不更新任何旧记忆。
+
+这是上游的按位置容错策略，不能保证模型生成的内容在语义上一定对应正确。
+新增 `amem.neighbor_updates.length_mismatch` 日志记录候选数、两个数组的实际长度、
+应用及忽略的条目数，不记录记忆正文，也不因此增加 LLM 调用。
+保留原始提示词和 JSON Schema，不增加动态长度约束或纠正重试。
+
+原适配版本会对过长数组抛出 `ValueError`，比上游更严格。
+本次修复将实现标识更新为 `amem_original_json_unified_v2`，结果的 `method_config`
+增加 `neighbor_update_policy=upstream_positional_prefix`，便于区分修复前后的实验。
+单条笔记的原子写入、非法链接校验及其他显式失败策略仍保留；这仅对齐邻居长度处理，
+不表示整个框架与上游评测协议完全一致。
 
 ## 4. 查看结果与继续开发
 
@@ -176,8 +198,27 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 
 ### 慢请求诊断
 
+终端默认使用**精简模式**：保留运行概要、进度、会话结果落盘提示和简短错误定位。
+逐次请求、完整 `usage`、等待心跳和完整 traceback 仍全部写入 `run_*.log`，
+不会因终端精简而丢失诊断信息。模型下载/加载进度及第三方组件自身的输出不受此选项统一控制。
+
+在原运行命令后添加以下参数即可切换终端详细程度：
+
+```bash
+# 精简终端输出（默认），完整日志保存在文件中
+--log-mode concise
+
+# 在终端也显示完整阶段、请求和异常日志
+--log-mode full
+```
+
+也可以在 `.env` 中设置 `EVAL_LOG_MODE=concise` 或 `EVAL_LOG_MODE=full`。
+优先级为命令行 > `.env` > 进程环境变量 > 默认 `concise`。
+`--show-config` 的 `logging` 字段以及结果文件的 `console_log_mode` / `file_log_mode`
+会记录最终设置。此选项只控制终端详细程度，文件日志始终完整。
+
 无需增加参数，继续使用原来的运行命令。日志保存在 `--output-dir` 指定目录中的
-`run_<run_tag>.log`，启动时的 `status="log.open"` 会打印具体路径。
+`run_<run_tag>.log`，启动时会打印具体路径（精简模式显示 `Log: ...`）。
 新增诊断覆盖 A-Mem 的分析、演化、查询改写，以及统一适配器的最终回答；
 不代表已经覆盖其他 baseline 自己的客户端、裁判或远程服务内部的调用。
 

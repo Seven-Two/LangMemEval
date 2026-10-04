@@ -85,6 +85,7 @@ ENV_FLAGS = {
     "benchmark": "EVAL_BENCHMARK", "split": "EVAL_SPLIT", "systems": "EVAL_SYSTEMS",
     "num_samples": "EVAL_NUM_SAMPLES", "skip_judge": "EVAL_SKIP_JUDGE",
     "data_file": "EVAL_DATA_FILE", "output_dir": "EVAL_RESULTS_DIR",
+    "log_mode": "EVAL_LOG_MODE",
     "judge_model": "JUDGE_MODEL", "longmemeval_judge_model": "LONGMEMEVAL_JUDGE_MODEL",
     "amem_response_format": "AMEM_RESPONSE_FORMAT", "amem_neighbor_k": "AMEM_NEIGHBOR_K",
     "amem_evolution_threshold": "AMEM_EVOLUTION_THRESHOLD", "amem_temperature": "AMEM_TEMPERATURE",
@@ -96,6 +97,8 @@ def add_model_arguments(parser):
     import argparse
     parser.add_argument("--env-file", help="Dotenv file, default ./.env; CLI values override it")
     parser.add_argument("--show-config", action="store_true", help="Print resolved settings without model/data calls")
+    parser.add_argument("--log-mode", choices=("concise", "full"),
+                        help="Console detail: concise (default) or full; log file always retains full diagnostics")
     group = parser.add_argument_group("Shared chat and embedding configuration")
     for flag in ("llm-api-key", "llm-base-url", "llm-extra-body", "embedding-model",
                  "embedding-api-key", "embedding-base-url", "embedding-revision",
@@ -140,8 +143,10 @@ def configured_environment(args):
     previous = {key: os.environ.get(key) for key in values}
     try:
         os.environ.update(values)
-        defaults = {"benchmark": "locomo", "systems": "all", "num_samples": 10, "skip_judge": False}
-        for attr in ("benchmark", "split", "systems", "num_samples", "skip_judge", "data_file", "output_dir", "llm_model"):
+        defaults = {"benchmark": "locomo", "systems": "all", "num_samples": 10, "skip_judge": False,
+                    "log_mode": "concise"}
+        for attr in ("benchmark", "split", "systems", "num_samples", "skip_judge", "data_file", "output_dir",
+                     "llm_model", "log_mode"):
             value = values.get(ENV_FLAGS[attr], defaults.get(attr))
             if attr == "num_samples":
                 value = int(value)
@@ -151,6 +156,8 @@ def configured_environment(args):
                 value = value if value is not None else "gpt-4.1"
                 if not value.strip():
                     raise ValueError("LLM_MODEL must not be empty")
+            elif attr == "log_mode" and value not in {"concise", "full"}:
+                raise ValueError("EVAL_LOG_MODE must be concise or full")
             setattr(args, attr, value)
         validate_base_url(os.getenv("OPENAI_BASE_URL"))
         yield sources

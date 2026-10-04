@@ -15,14 +15,40 @@ _state = ContextVar("progress_state", default=None)
 
 
 class _Console(logging.StreamHandler):
+    def __init__(self, stream, *, mode, path):
+        super().__init__(stream)
+        self.mode, self.path = mode, str(path)
+
     def emit(self, record):
-        tqdm.write(self.format(record), file=self.stream)
+        if self.mode == "full":
+            message = self.format(record)
+        else:
+            fields = getattr(record, "diagnostic_fields", {})
+            status = getattr(record, "diagnostic_status", None)
+            if status == "log.open":
+                message = f"Log: {self.path} (console=concise, file=full)"
+            elif status == "failed" and record.exc_info and record.exc_info[0] is not None:
+                # Only the innermost failure owns the traceback. Keep the full
+                # exception in the file, without mutating this shared LogRecord.
+                location = " ".join(f"{key}={fields[key]}" for key in
+                    ("method", "conversation", "session", "message_index", "question_index", "stage")
+                    if key in fields)
+                message = f"ERROR {location}: {record.exc_info[0].__name__}; details: {self.path}"
+            elif status == "checkpoint.saved":
+                message = (f"{fields.get('method', '')}: {fields.get('conversation', '')} "
+                           f"saved {fields.get('rows', 0)} question results")
+            elif status == "stopped" and fields.get("stage") == "run":
+                message = f"Run stopped; details: {self.path}"
+            else:
+                return
+        tqdm.write(message, file=self.stream)
 
 
 def _emit(status, fields, *, exc_info=False):
     message = " ".join(f"{key}={json.dumps(value, ensure_ascii=False)}"
                        for key, value in {"status": status, **fields}.items())
-    logger.log(logging.ERROR if status == "failed" else logging.INFO, message, exc_info=exc_info)
+    logger.log(logging.ERROR if status == "failed" else logging.INFO, message, exc_info=exc_info,
+               extra={"diagnostic_status": status, "diagnostic_fields": fields})
 
 
 def _new_exception():
@@ -79,10 +105,12 @@ def stage(name, **fields):
 
 
 @contextmanager
-def run_logging(path, *, heartbeat_seconds=30):
-    """One run owns its handlers and heartbeat; close and restore on every exit."""
+def run_logging(path, *, heartbeat_seconds=30, console_mode="concise"):
+    """Always keep full file diagnostics; independently control console detail."""
     if heartbeat_seconds <= 0:
         raise ValueError("heartbeat_seconds must be positive")
+    if console_mode not in {"concise", "full"}:
+        raise ValueError("console_mode must be concise or full")
     state = {"active": {}, "lock": threading.Lock()}
     stop = threading.Event()
     def heartbeat():
@@ -97,7 +125,7 @@ def run_logging(path, *, heartbeat_seconds=30):
                         _emit("waiting", {**details, "elapsed_s": round(elapsed, 1)})
 
     file_handler = logging.FileHandler(path, encoding="utf-8")
-    console = _Console(sys.stderr)
+    console = _Console(sys.stderr, mode=console_mode, path=path)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     for handler in (file_handler, console):
         handler.setFormatter(formatter)
@@ -109,7 +137,7 @@ def run_logging(path, *, heartbeat_seconds=30):
     worker = threading.Thread(target=heartbeat, name="evaluation-progress", daemon=True)
     worker.start()
     try:
-        event("log.open", path=str(path))
+        event("log.open", path=str(path), console_mode=console_mode, file_mode="full")
         yield
     finally:
         stop.set()

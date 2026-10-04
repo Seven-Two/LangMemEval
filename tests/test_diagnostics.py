@@ -114,3 +114,49 @@ def test_interrupted_stage_is_not_reported_done(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert 'status="stopped"' in text
     assert 'status="done"' not in text
+
+
+def test_concise_console_keeps_full_file_and_prints_failure_only_once(tmp_path, capsys):
+    path = tmp_path / "concise.log"
+    with pytest.raises(ValueError):
+        with log.run_logging(path):
+            with log.stage("conversation", conversation="c0"):
+                for index in range(30):
+                    log.event("llm.response", request_id=str(index), usage={"completion_tokens": 100})
+                    log.event("waiting", elapsed_s=30)
+                with log.stage("amem.evolve"):
+                    raise ValueError("detailed-error-only-in-file")
+    console = capsys.readouterr().err
+    saved = path.read_text(encoding="utf-8")
+    assert "console=concise" in console
+    assert console.count("ERROR ") == 1 and "ValueError" in console
+    assert str(path) in console
+    assert "llm.response" not in console and "waiting" not in console
+    assert "Traceback" not in console and "detailed-error-only-in-file" not in console
+    assert saved.count('status="llm.response"') == 30
+    assert saved.count('status="waiting"') == 30
+    assert "Traceback" in saved and "ValueError: detailed-error-only-in-file" in saved
+
+
+def test_full_console_keeps_request_details_and_traceback(tmp_path, capsys):
+    path = tmp_path / "full.log"
+    with pytest.raises(RuntimeError):
+        with log.run_logging(path, console_mode="full"):
+            log.event("llm.response", usage={"completion_tokens": 100})
+            with log.stage("answer.api"):
+                raise RuntimeError("offline failure")
+    console = capsys.readouterr().err
+    saved = path.read_text(encoding="utf-8")
+    for text in (console, saved):
+        assert 'status="llm.response"' in text and '"completion_tokens": 100' in text
+        assert "Traceback" in text and "RuntimeError: offline failure" in text
+
+
+def test_invalid_console_mode_does_not_open_log_or_change_handlers(tmp_path):
+    previous = log.logger.handlers[:], log.logger.level, log.logger.propagate
+    path = tmp_path / "invalid.log"
+    with pytest.raises(ValueError, match="console_mode"):
+        with log.run_logging(path, console_mode="invalid"):
+            pass
+    assert not path.exists()
+    assert (log.logger.handlers, log.logger.level, log.logger.propagate) == previous

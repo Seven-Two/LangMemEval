@@ -73,6 +73,10 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 可通过 `EVAL_DATA_DIR`、`EVAL_MODELS_DIR`、`EVAL_RESULTS_DIR` 指定。
 `--output-dir` 优先于默认结果目录；不会向源码或 site-packages 写入实验数据。
 
+终端默认精简输出，完整阶段、请求用量、重试及异常堆栈保存在输出目录的 `run_*.log`。
+在原命令后添加 `--log-mode full` 可在终端也显示完整日志，`--log-mode concise` 切回精简模式。
+也可在 `.env` 设置 `EVAL_LOG_MODE=concise` 或 `full`；命令行优先，文件日志始终完整。
+
 已通过离线集成测试；未运行真实付费模型 benchmark，不提供性能结论。
 
 ## 第三方来源与许可证

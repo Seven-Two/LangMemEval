@@ -65,7 +65,7 @@ def main():
             output_dir.mkdir(parents=True, exist_ok=True)
             model_tag = re.sub(r"[^A-Za-z0-9_-]", "_", args.llm_model)
             args.run_tag = f"{args.benchmark}_{model_tag}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
-            with run_logging(output_dir / f"run_{args.run_tag}.log"):
+            with run_logging(output_dir / f"run_{args.run_tag}.log", console_mode=args.log_mode):
                 with stage("run", benchmark=args.benchmark, systems=args.systems, model=args.llm_model):
                     return _run(args, sources)
     except ValueError as exc:
@@ -106,6 +106,7 @@ def _run(args, sources):
     if args.show_config:
         print(json.dumps({"systems": system_names, "benchmark": args.benchmark,
                           "num_samples": args.num_samples, "skip_judge": args.skip_judge,
+                          "logging": {"console": args.log_mode, "file": "full"},
                           "models": model_config, "answer_protocol": protocol.to_dict(),
                           "amem": amem_config, "sources": sources,
                           "embedding_scope": "registered methods; native adapters retain their own configuration"},
@@ -170,6 +171,7 @@ def _run(args, sources):
             "models": model_config if unified else None,
             "configuration_sources": sources,
             "runtime_log": f"run_{run_tag}.log",
+            "console_log_mode": args.log_mode, "file_log_mode": "full",
             "context_trace": "per_question" if unified else "not_instrumented",
             "phase_instrumentation": "write/retrieve/answer/judge" if unified else "partial; inspect unclassified",
         }

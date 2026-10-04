@@ -60,6 +60,29 @@ def test_reject_old_embedding_names_with_actionable_message(tmp_path):
             pass
 
 
+def test_log_mode_cli_overrides_dotenv_and_environment(tmp_path, monkeypatch):
+    import argparse
+    from langmem_eval.configuration import add_model_arguments
+
+    path = tmp_path / "logging.env"
+    path.write_text("EVAL_LOG_MODE=concise\n", encoding="utf-8")
+    monkeypatch.setenv("EVAL_LOG_MODE", "full")
+    parser = argparse.ArgumentParser()
+    add_model_arguments(parser)
+    args = parser.parse_args(["--env-file", str(path)])
+    with configured_environment(args) as sources:
+        assert args.log_mode == "concise" and sources["EVAL_LOG_MODE"] == ".env"
+    args = parser.parse_args(["--env-file", str(path), "--log-mode", "full"])
+    with configured_environment(args) as sources:
+        assert args.log_mode == "full" and sources["EVAL_LOG_MODE"] == "cli"
+    assert os.environ["EVAL_LOG_MODE"] == "full"
+    path.write_text("EVAL_LOG_MODE=invalid\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="EVAL_LOG_MODE"):
+        with configured_environment(parser.parse_args(["--env-file", str(path)])):
+            pass
+    assert os.environ["EVAL_LOG_MODE"] == "full"
+
+
 def test_show_config_has_no_inference_and_redacts_secrets(tmp_path, monkeypatch, capsys):
     from langmem_eval.cli import main
     import langmem_eval.registry as registry

@@ -24,7 +24,7 @@ from .config import AMemSettings
 from .memory import Note
 
 UPSTREAM_COMMIT = "0c8039f28fdcc08189a23c07a3437d9d2482f9c2"
-IMPLEMENTATION = "amem_original_json_unified_v1"
+IMPLEMENTATION = "amem_original_json_unified_v2"
 PROMPT_SHA256 = hashlib.sha256((prompts.ANALYSIS_PROMPT + prompts.EVOLUTION_PROMPT
                                + prompts.QUERY_PROMPT).encode()).hexdigest()
 
@@ -46,6 +46,7 @@ class AMemBackend:
         return {"implementation": IMPLEMENTATION, "upstream_commit": UPSTREAM_COMMIT,
                 "prompt_sha256": PROMPT_SHA256, "llm_model": self.model,
                 "settings": self.settings.public_config(), "note_count": len(self.notes),
+                "neighbor_update_policy": "upstream_positional_prefix",
                 "embedding_dimensions_actual": self.vectors.shape[1] if self.vectors is not None else None,
                 "retrieval_unit": "seed_plus_linked_notes", "answer_protocol": "framework_unified"}
 
@@ -123,10 +124,16 @@ class AMemBackend:
                 note.tags = evolution["tags_to_update"]
             if "update_neighbor" in evolution["actions"]:
                 contexts, tags = evolution["new_context_neighborhood"], evolution["new_tags_neighborhood"]
-                if len(contexts) > len(indices) or len(tags) > len(indices):
-                    raise ValueError("A-Mem returned more neighbor updates than supplied neighbors")
-                # Upstream accepts a shorter update list from small models.
-                for offset in range(min(len(indices), len(tags))):
+                # Match upstream memory_layer.py:844-858: extra items are ignored,
+                # short tag lists update only a prefix; missing contexts stay intact.
+                applied = min(len(indices), len(tags))
+                if len(contexts) != len(indices) or len(tags) != len(indices):
+                    event("amem.neighbor_updates.length_mismatch", policy="upstream_positional_prefix",
+                          neighbors=len(indices), context_items=len(contexts), tag_items=len(tags),
+                          applied_neighbors=applied, ignored_context_items=max(0, len(contexts) - applied),
+                          ignored_tag_items=max(0, len(tags) - applied),
+                          preserved_contexts=max(0, applied - len(contexts)))
+                for offset in range(applied):
                     updated[indices[offset]].tags = tags[offset]
                     if offset < len(contexts):
                         updated[indices[offset]].context = contexts[offset]
