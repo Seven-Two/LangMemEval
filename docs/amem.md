@@ -217,6 +217,15 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 `--show-config` 的 `logging` 字段以及结果文件的 `console_log_mode` / `file_log_mode`
 会记录最终设置。此选项只控制终端详细程度，文件日志始终完整。
 
+交互终端默认显示两层进度，无需新增参数：上层是 conversation 数量，下层依次显示
+`Write memory`（已成功保存的消息数 / 历史消息总数）和 `Answer questions`
+（已处理题数 / 总题数，包含失败题）。A-Mem 按条推进写入，其他统一后端按 session 完成时推进。
+进度条还显示用时、估算剩余时间，以及 `analyze`、`evolve`、`retrieve`、`answer`、
+`judge`、`waiting` 等当前状态；预计剩余时间会随模型响应速度波动。
+回答阶段的 `errors` 表示已处理题中的回答或裁判错误数，不是答错题数。
+失败或中断不会把未完成的写入补成 100%；终端进度条不写入日志文件，
+stderr 不连接交互终端时自动禁用。原生 baseline 内部阶段未统一接入，保留外层对话进度。
+
 无需增加参数，继续使用原来的运行命令。日志保存在 `--output-dir` 指定目录中的
 `run_<run_tag>.log`，启动时会打印具体路径（精简模式显示 `Log: ...`）。
 新增诊断覆盖 A-Mem 的分析、演化、查询改写，以及统一适配器的最终回答；

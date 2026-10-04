@@ -142,7 +142,8 @@ def _run(args, sources):
         results = []
         checkpoints = output_dir / f"{name}_{run_tag}_progress.jsonl"
         with checkpoints.open("w", encoding="utf-8") as progress:
-            for index, conv in enumerate(tqdm(conversations, desc=name), 1):
+            for index, conv in enumerate(tqdm(conversations, desc=f"{name} conversations",
+                                             position=0, dynamic_ncols=True, disable=None), 1):
                 try:
                     with stage("conversation", method=name, conversation=conv["sample_id"],
                                conversation_index=index, conversation_total=len(conversations)):

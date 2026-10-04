@@ -8,6 +8,7 @@ import threading
 from time import perf_counter
 
 from tqdm import tqdm
+from .console_progress import ConsoleProgress
 
 logger = logging.getLogger("langmem_eval.progress")
 _context = ContextVar("progress_context", default={})
@@ -18,13 +19,19 @@ class _Console(logging.StreamHandler):
     def __init__(self, stream, *, mode, path):
         super().__init__(stream)
         self.mode, self.path = mode, str(path)
+        self.progress = ConsoleProgress(stream)
+
+    def close(self):
+        self.progress.close()
+        super().close()
 
     def emit(self, record):
+        fields = getattr(record, "diagnostic_fields", {})
+        status = getattr(record, "diagnostic_status", None)
+        self.progress.handle(status, fields)
         if self.mode == "full":
             message = self.format(record)
         else:
-            fields = getattr(record, "diagnostic_fields", {})
-            status = getattr(record, "diagnostic_status", None)
             if status == "log.open":
                 message = f"Log: {self.path} (console=concise, file=full)"
             elif status == "failed" and record.exc_info and record.exc_info[0] is not None:

@@ -19,6 +19,7 @@ def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn
     sample_id = conv.get("sample_id", "unknown")
     qa_pairs = conv.get("qa", [])
     rows = []
+    event("question.plan", conversation=sample_id, questions=len(qa_pairs))
     for index, qa in enumerate(qa_pairs):
         question, truth = qa.get("question", ""), qa.get("answer", "")
         category, question_id = qa.get("category", 0), qa.get("question_id", "")
@@ -61,6 +62,5 @@ def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn
         rows.append(row)
         event("question.result", question_index=index + 1, question_total=len(qa_pairs),
               answer_status=row["answer_status"], judge_status=row["judge_status"], f1=f1)
-        if (index + 1) % 20 == 0:
-            print(f"    QA {index + 1}/{len(qa_pairs)} - F1={f1:.3f}")
+    event("question.done", conversation=sample_id, questions=len(rows))
     return rows
