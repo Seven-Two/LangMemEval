@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import sys
+import traceback
 
 from agents_memory.usage import phase
 
@@ -52,7 +54,8 @@ async def _qa_results_async(
                 raise ValueError("Answer function returned empty or non-string output")
         except Exception as err:
             error = {"stage": "answer", "type": type(err).__name__}
-            print(f"    Error on Q{i}: {type(err).__name__}")
+            print(f"    {sample_id} / Q{i}: answer failed", file=sys.stderr)
+            traceback.print_exc()
             predicted = ""
 
         # An execution error is never a correct abstention, even with empty truth.
@@ -91,6 +94,8 @@ async def _qa_results_async(
                 row.update(scores)
                 row["judge_status"] = scores.get("judge_status", "ok")
             except Exception as err:
+                print(f"    {sample_id} / Q{i}: judge failed", file=sys.stderr)
+                traceback.print_exc()
                 row.update(judge_status="error", judge_error={"type": type(err).__name__})
             if row["judge_status"] == "error":
                 row["status"] = "error"

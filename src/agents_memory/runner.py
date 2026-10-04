@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
+import traceback
 from uuid import uuid4
 
 from tqdm import tqdm
@@ -136,7 +138,10 @@ def _run(args, sources):
                         category_names=categories, judge_fn=judge_fn)
                     rows = normalize_results(conv, returned, categories, run_judge, judge_fn)
                 except Exception as exc:
-                    print(f"  {conv['sample_id']}: {type(exc).__name__}")
+                    tqdm.write(f"  {name} / {conv['sample_id']}: {type(exc).__name__}", file=sys.stderr)
+                    # Keep the original traceback and chained cause visible while
+                    # still recording failed questions in the fixed denominator.
+                    traceback.print_exc()
                     rows = failed_results(conv, categories, run_judge,
                                           stage="conversation", error_type=type(exc).__name__)
                 results.extend(rows)

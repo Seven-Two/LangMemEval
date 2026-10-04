@@ -8,6 +8,8 @@ or loopback socket, works inside notebook event loops, and shares the same scori
 functions. Row semantics match agents_memory.systems._helpers._qa_results_async.
 """
 from copy import deepcopy
+import sys
+import traceback
 
 
 def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn=None):
@@ -28,7 +30,8 @@ def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn
                 raise ValueError("Answer function returned empty or non-string output")
         except Exception as exc:
             error = {"stage": "answer", "type": type(exc).__name__}
-            print(f"    Error on Q{index + 1}: {type(exc).__name__}")
+            print(f"    {sample_id} / Q{index + 1}: answer failed", file=sys.stderr)
+            traceback.print_exc()
             predicted = ""
         f1 = 0.0 if error else scoring.compute_f1(predicted, truth)
         row = dict(sample_id=sample_id, question=question, ground_truth=truth,
@@ -52,6 +55,8 @@ def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn
                 row.update(scores)
                 row["judge_status"] = scores.get("judge_status", "ok")
             except Exception as exc:
+                print(f"    {sample_id} / Q{index + 1}: judge failed", file=sys.stderr)
+                traceback.print_exc()
                 row.update(judge_status="error", judge_error={"type": type(exc).__name__})
             if row["judge_status"] == "error":
                 row["status"] = "error"
