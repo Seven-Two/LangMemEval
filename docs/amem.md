@@ -172,7 +172,55 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 成本在 `cost_accounting` 中区分 write/retrieve/answer/judge。
 本地 embedding 单独记录调用次数，Token 和计算费用为未知，**不等于零成本**。
 远程服务按可观测 SDK usage 统计；未配置价格的模型费用仍为未知。
-真实失败只记录类型而不打印包含敏感响应的异常文本，排查配置可先用离线测试。
+失败会在运行日志中保留完整异常堆栈；逐题结果仍记录阶段和异常类型。
+
+### 慢请求诊断
+
+无需增加参数，继续使用原来的运行命令。日志保存在 `--output-dir` 指定目录中的
+`run_<run_tag>.log`，启动时的 `status="log.open"` 会打印具体路径。
+新增诊断覆盖 A-Mem 的分析、演化、查询改写，以及统一适配器的最终回答；
+不代表已经覆盖其他 baseline 自己的客户端、裁判或远程服务内部的调用。
+
+同一次逻辑请求的所有诊断行共享 `request_id`，同时保留会话、消息/问题序号。
+`parent_stage` 可区分 `amem.analyze`、`amem.evolve`、`amem.query.rewrite` 和 `answer.api`。
+
+| 日志事件/字段 | 含义 |
+| --- | --- |
+| `llm.request` | 模型、输出预算、SDK 最大重试次数、实际传入的顶层或嵌套 `enable_thinking` 布尔值；传入不等于服务端一定采用 |
+| `llm.http.start` | 一次 SDK HTTP 发送开始，`attempt` 从 1 计数 |
+| `llm.http.response` | 本次发送耗时、HTTP 状态码、服务商请求 ID、`retry-after` / `retry-after-ms` |
+| `llm.http.error` | 本次发送的异常类型，例如 `ReadTimeout`，以及耗时 |
+| `llm.retry` | 确实开始下一次尝试时记录；包含上次状态码/异常和两次尝试间隔 |
+| `llm.response` | 整次调用耗时、完整 `usage`、输出长度、尝试次数及重试次数 |
+| `llm.error` | SDK 最终失败时的异常类型、总耗时、已发生的尝试次数及重试次数 |
+| `visible_output_chars` | 原始 `message.content` 的 Unicode 字符数，未去空白或解析 JSON；不是 Token 数 |
+| `reasoning_chars` | 返回的推理文本字符数；支持 `reasoning_content`、`reasoning` 和可识别的 `reasoning_details` 文本 |
+| `reasoning_chars_by_field` | 分字段记录长度，不把可能重复的推理字段相加；`reasoning_field` 表示选用了哪个字段 |
+| `usage` | SDK 解析后的完整服务商用量对象，包括返回的推理、缓存用量和扩展字段；不自行估算 |
+| `http_attempts` / `retry_count` | SDK HTTP 发送次数 / 额外尝试次数；不修改 SDK 原有重试策略或成本统计 |
+
+长度 `null` 表示没有返回可识别文本，**不代表没有思考**；空字符串的长度为 `0`。
+如果服务商把 `<think>` 内容直接放进 `content`，它仍算在 `visible_output_chars` 中，
+这里不会猜测和拆分正文。Token 数以服务商 `usage` 为准，其准确性仍需要服务商确认。
+注入未接入 HTTP 诊断的自定义客户端时，尝试/重试次数为 `null`，避免误报成没有重试。
+
+重试间隔包含 SDK 退避等待和少量本地处理，不是精确的睡眠时长；服务商内部重试不可见。
+当前为非流式调用，HTTP 耗时包含网络和等待完整响应的时间，不能拆出首 Token 延迟、
+服务端排队和生成各自耗时。`waiting` 是心跳日志，不是额外 API 请求。
+
+例如同一个 `request_id` 出现 `429 → llm.retry → 200`，说明确实遇到了限流重试；
+只有一次尝试却耗时 200 秒，说明这 200 秒没有发生客户端 SDK 重试。
+若正文很短而 `usage.completion_tokens_details.reasoning_tokens` 很高，
+可以确认服务商报告的主要输出用量属于推理部分。
+
+这些新增结构化诊断不会记录提示词、输出/推理正文、密钥或完整 HTTP 请求头。
+现有异常堆栈仍可能包含服务商错误信息；原有结果文件中的回答上下文/提示词记录继续保留。
+
+在矩池云环境可运行离线诊断测试（无需模型、网络或密钥）：
+
+```bash
+uv run --locked --extra dev python -m pytest -q tests/test_llm_diagnostics.py tests/test_diagnostics.py
+```
 
 代码位置：
 
@@ -182,6 +230,7 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 - `src/langmem_eval/methods/amem/config.py`：A-Mem 算法设置和公开配置记录。
 - `src/langmem_eval/methods/amem/memory.py`：笔记结构与序列化。
 - `src/langmem_eval/methods/amem/clients.py`：A-Mem 结构化 LLM 输出边界。
+- `src/langmem_eval/llm_diagnostics.py`：聊天响应长度、完整用量和逐次 HTTP 重试诊断。
 - `src/langmem_eval/methods/amem/prompts.py`：固定上游提示词和 schema。
 - `src/langmem_eval/methods/amem/__init__.py`：方法注册入口。
 - `src/langmem_eval/adapter.py`：统一回答和 trace。

@@ -9,6 +9,7 @@ def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn
     from langmem_eval.protocol import AnswerProtocol
     from langmem_eval.registry import create_backend
     from langmem_eval.model_api import answer_extra_options
+    from langmem_eval.llm_diagnostics import DiagnosticHttpClient, chat_completion
 
     protocol = AnswerProtocol.from_env(judge_fn)
     model_options = answer_extra_options()
@@ -42,10 +43,11 @@ def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn
         answer.trace.update(messages=messages, answer_called=True, failure_stage="answer",
                             empty_context_action="answer" if not selection.context else None)
         with phase("answer"), stage("answer.api", model=llm_model, max_output_tokens=protocol.max_output_tokens):
-            response = OpenAI().chat.completions.create(
-                model=llm_model, temperature=protocol.temperature,
-                max_tokens=protocol.max_output_tokens, messages=messages, **model_options,
-            )
+            with DiagnosticHttpClient() as http_client:
+                response = chat_completion(OpenAI(http_client=http_client), operation="answer",
+                    model=llm_model, temperature=protocol.temperature,
+                    max_tokens=protocol.max_output_tokens, messages=messages, **model_options,
+                )
         content = response.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Answer model returned empty content")

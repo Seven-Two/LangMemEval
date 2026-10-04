@@ -5,8 +5,7 @@ langmem_eval.embeddings; no model is loaded at import time.
 """
 import json
 import os
-from agents_memory.diagnostics import event
-
+from ...llm_diagnostics import DiagnosticHttpClient, chat_completion
 from ...model_api import validate_base_url
 from .config import AMemSettings
 
@@ -37,7 +36,7 @@ class OpenAIController:
     def __init__(self, model: str, settings: AMemSettings, *, client=None):
         from openai import OpenAI
         validate_base_url(os.getenv("OPENAI_BASE_URL"))
-        self.client = client if client is not None else OpenAI()
+        self.client = client if client is not None else OpenAI(http_client=DiagnosticHttpClient())
         self.model, self.settings = model, settings
 
     def complete(self, prompt: str, schema: dict) -> dict:
@@ -50,17 +49,11 @@ class OpenAIController:
             kwargs["response_format"] = {"type": "json_object"}
         if self.settings.extra_body:
             kwargs["extra_body"] = self.settings.extra_body
-        event("llm.request", model=self.model, response_format=mode,
-              max_output_tokens=self.settings.max_output_tokens)
-        response = self.client.chat.completions.create(
+        response = chat_completion(self.client, operation="amem.structured",
             model=self.model, messages=[{"role": "system", "content": "You must respond with a JSON object."},
                                         {"role": "user", "content": prompt}],
             temperature=self.settings.temperature, max_tokens=self.settings.max_output_tokens, **kwargs)
         choice = response.choices[0]
-        usage = getattr(response, "usage", None)
-        event("llm.response", model=self.model, finish_reason=choice.finish_reason,
-              prompt_tokens=getattr(usage, "prompt_tokens", None),
-              completion_tokens=getattr(usage, "completion_tokens", None))
         if choice.finish_reason == "length":
             raise ValueError("A-Mem structured response was truncated; increase AMEM_MAX_OUTPUT_TOKENS")
         content = choice.message.content

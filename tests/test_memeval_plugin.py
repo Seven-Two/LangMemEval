@@ -27,7 +27,7 @@ def test_registered_plugin_and_real_scoring(monkeypatch):
             return ["Alice lives in Berlin"]
 
     class Client:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.chat = SimpleNamespace(completions=self)
         def create(self, **kwargs):
             return SimpleNamespace(choices=[SimpleNamespace(

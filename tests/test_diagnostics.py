@@ -88,7 +88,7 @@ def test_amem_write_retrieve_answer_logged_without_payloads(tmp_path, monkeypatc
     def create(**kwargs):
         calls.append(kwargs)
         return NS(choices=[NS(message=NS(content="Berlin"), finish_reason="stop")])
-    monkeypatch.setattr(openai, "OpenAI", lambda: NS(chat=NS(completions=NS(create=create))))
+    monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: NS(chat=NS(completions=NS(create=create))))
     conv = {"sample_id": "c0", "conversation": {"session_1": [
         {"speaker": "Alice", "text": "private-history-marker Berlin"}]},
         "qa": [{"question": "private-question-marker", "answer": "Berlin", "category": 1}]}

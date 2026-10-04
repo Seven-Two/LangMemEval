@@ -65,7 +65,7 @@ def test_adapter_traces_exact_request_and_empty_policy(monkeypatch):
         def retrieve(self, question, limit):
             return list(records)
     class Client:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.chat = NS(completions=self)
         def create(self, **kwargs):
             requests.append(kwargs)

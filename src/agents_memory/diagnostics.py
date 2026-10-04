@@ -48,7 +48,7 @@ def failure(name, **fields):
 def stage(name, **fields):
     """Time a stage and expose its identifiers to nested operations."""
     state = _state.get()
-    context = {**_context.get(), **fields, "stage": name}
+    context = {**_context.get(), **fields, "parent_stage": _context.get().get("stage"), "stage": name}
     token = _context.set(context)
     started = perf_counter()
     key = object()

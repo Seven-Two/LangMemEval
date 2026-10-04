@@ -199,7 +199,7 @@ def test_unified_adapter_records_provenance_and_keeps_gold_out_of_requests(monke
     monkeypatch.setattr(registry, "create_backend", lambda *args: obj)
     sent = []
     class Client:
-        def __init__(self):
+        def __init__(self, **kwargs):
             self.chat = NS(completions=self)
         def create(self, **kwargs):
             sent.append(kwargs)
