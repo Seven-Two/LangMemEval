@@ -27,6 +27,8 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 - `src/langmem_eval/methods/amem/backend.py`：A-Mem 记忆构建、演化和检索。
 - `src/langmem_eval/benchmark.py`：归一化会话转换和上下文预算。
 - `src/langmem_eval/model_api.py`：共享的 API 地址校验和请求附加选项。
+- `src/langmem_eval/configuration.py`：命令行 > `.env` > 进程环境 > 默认值的统一解析。
+- `src/langmem_eval/embeddings.py`：共享的本地和 API embedding 客户端。
 - `src/langmem_eval/adapter.py`：唯一的评测适配器实现。
 - `src/langmem_eval/cli.py`：调用 `agents_memory.runner.main` 的统一入口。
 - `src/agents_memory/runner.py`：实验清单、执行、结果落盘与汇总。
@@ -59,6 +61,8 @@ src/langmem_eval/
 ├── protocol.py             # 回答协议
 ├── evaluation.py           # 逐题评分与失败记录
 ├── model_api.py            # 跨方法通用的 API 校验
+├── configuration.py        # 配置解析、共享 embedding 设置
+├── embeddings.py           # 本地/API embedding 实现
 └── methods/
     ├── amem/
     │   ├── __init__.py     # 只注册工厂，延迟导入 backend
@@ -66,7 +70,7 @@ src/langmem_eval/
     │   ├── config.py       # AMemSettings、环境变量
     │   ├── memory.py       # Note 数据结构及序列化
     │   ├── prompts.py      # 固定上游提示词、输出 schema
-    │   └── clients.py      # A-Mem 的 LLM/embedding 接口
+    │   └── clients.py      # A-Mem 的结构化 LLM 输出接口
     └── langmem/
         ├── __init__.py
         └── backend.py
@@ -160,7 +164,8 @@ MemEval 原生 systems 下的其他 baseline 仍使用自身回答逻辑，结�
 uv run langmem-eval --systems langmem --benchmark locomo --num-samples 1 --context-tokens 4096 --tokenizer cl100k_base --top-k 20 --max-output-tokens 256 --answer-temperature 0.1 --answer-style concise --empty-context abstain --skip-judge --output-dir results/locomo-protocol-v1
 ```
 
-CLI 优先于环境变量。对应变量为 `EVAL_PROTOCOL`（auto/locomo/longmemeval）、
+CLI 优先于 `.env`，`.env` 优先于进程环境变量。模型与算法参数见 [统一配置](configuration.md)。
+回答协议对应变量为 `EVAL_PROTOCOL`（auto/locomo/longmemeval）、
 `EVAL_CONTEXT_TOKENS`、`EVAL_TOKENIZER`、`EVAL_TOP_K`、`EVAL_MAX_OUTPUT_TOKENS`、
 `EVAL_TEMPERATURE`、`EVAL_ANSWER_STYLE`（concise/complete）、
 `EVAL_EMPTY_CONTEXT`（abstain/answer）、`EVAL_ABSTENTION_TEXT`。

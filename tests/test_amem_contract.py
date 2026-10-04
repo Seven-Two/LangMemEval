@@ -10,7 +10,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 
-from langmem_eval.benchmark import Session
+from langmem_eval.interfaces import Session
 
 
 class Encoder:
@@ -52,7 +52,8 @@ def session(*texts, date="2025-01-01", name="session_1"):
 
 
 def backend(responses, **kwargs):
-    from langmem_eval.amem import AMemBackend, AMemSettings
+    from langmem_eval.methods.amem.backend import AMemBackend
+    from langmem_eval.methods.amem.config import AMemSettings
     controller, encoder = Controller(responses), Encoder()
     settings = AMemSettings(**kwargs)
     obj = AMemBackend("offline-model", settings=settings, controller=controller, embedder=encoder)
@@ -149,12 +150,14 @@ def test_invalid_metadata_is_not_silently_replaced_by_generic_memory():
 def test_api_llm_and_embedding_have_independent_configuration(monkeypatch):
     import httpx
     from openai import OpenAI
-    from langmem_eval.amem import AMemSettings, OpenAIController, APIEmbedder
+    from langmem_eval.methods.amem.config import AMemSettings
+    from langmem_eval.methods.amem.clients import OpenAIController
+    from langmem_eval.embeddings import APIEmbedder
     monkeypatch.setenv("OPENAI_BASE_URL", "https://chat.invalid/v1")
-    monkeypatch.setenv("AMEM_EMBEDDING_PROVIDER", "openai")
-    monkeypatch.setenv("AMEM_EMBEDDING_MODEL", "test-embedding")
-    monkeypatch.setenv("AMEM_EMBEDDING_DIMS", "2")
-    monkeypatch.setenv("AMEM_EMBEDDING_BASE_URL", "https://embedding.invalid/v1")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("EMBEDDING_MODEL", "test-embedding")
+    monkeypatch.setenv("EMBEDDING_DIMS", "2")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://embedding.invalid/v1")
     monkeypatch.setenv("LLM_EXTRA_BODY", '{"enable_thinking": false}')
     settings = AMemSettings.from_env()
     requests = []

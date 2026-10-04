@@ -17,7 +17,8 @@ import numpy as np
 from ...interfaces import Session
 from ...model_api import validate_base_url
 from . import prompts
-from .clients import APIEmbedder, LocalEmbedder, OpenAIController, _validate
+from ...embeddings import APIEmbedder, LocalEmbedder
+from .clients import OpenAIController, _validate
 from .config import AMemSettings
 from .memory import Note
 

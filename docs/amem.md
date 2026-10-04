@@ -20,7 +20,7 @@ uv run --extra amem langmem-eval --list-methods
 
 列表应包含 `amem` 和 `langmem`。可选组 `amem` 提供本地 SentenceTransformers，
 不在列出方法时加载模型。首次实际运行可能需要下载模型权重；断网运行需提前缓存权重，
-设置 `AMEM_LOCAL_FILES_ONLY=true`。测试使用替身，不需要模型权重。
+设置 `EMBEDDING_LOCAL_FILES_ONLY=true`。测试使用替身，不需要模型权重。
 
 编辑已有 `.env`；尚无配置文件时从 `.env.example` 复制。不要覆盖已有密钥。
 
@@ -29,18 +29,19 @@ OPENAI_API_KEY=你的聊天服务密钥
 OPENAI_BASE_URL=https://你的服务商/v1
 LLM_MODEL=服务商实际支持的聊天模型ID
 
-AMEM_EMBEDDING_PROVIDER=local
-AMEM_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-AMEM_DEVICE=cpu
+EMBEDDING_PROVIDER=local
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DEVICE=cpu
 AMEM_RESPONSE_FORMAT=json_schema
 ```
 
 `OPENAI_BASE_URL` 填 API 根地址，不能带 `/chat/completions`。
 `--llm-model` 优先于 `LLM_MODEL`；两者未设时框架默认 `gpt-4.1`。
 同一个聊天模型用于记忆分析、演化、检索关键词生成和最终回答。
-已有环境变量优先于 `.env`。`AML_*` 只控制赛事服务，不控制这里的实验。
+优先级为命令行 > `.env` > 进程环境变量 > 默认值。`AML_*` 只控制赛事服务。
+embedding 配置现在由 A-Mem 和 LangMem 共用，详见 [统一配置](configuration.md)。
 
-默认使用原作者代码的 MiniLM embedding；通过 `AMEM_EMBEDDING_REVISION` 固定模型仓库的
+默认使用原作者代码的 MiniLM embedding；通过 `EMBEDDING_REVISION` 固定模型仓库的
 commit，可进一步固定权重。本实现没有自动选择最新 revision 或声称已固定权重版本。
 
 若聊天服务不支持严格 JSON schema，可显式设 `AMEM_RESPONSE_FORMAT=json_object`；
@@ -51,20 +52,20 @@ commit，可进一步固定权重。本实现没有自动选择最新 revision �
 LLM_EXTRA_BODY={"enable_thinking":false}
 ```
 
-该附加参数用于 A-Mem 的聊天请求和统一回答请求，**不自动应用于裁判或其他方法内部的 LLM**。
+该附加参数用于 A-Mem、LangMem 的聊天请求和统一回答请求，**不自动应用于裁判或原生 baseline 内部的 LLM**。
 不支持的参数会导致服务报错；不要将密钥或模型名写入 `LLM_EXTRA_BODY`。
 
 如果使用 embedding API，无需 `amem` 可选依赖，用 `uv sync --locked --extra dev` 安装即可。
 替换以上 embedding 配置，例如：
 
 ```dotenv
-AMEM_EMBEDDING_PROVIDER=openai
-AMEM_EMBEDDING_MODEL=服务商实际支持的embedding模型ID
-AMEM_EMBEDDING_BASE_URL=https://你的embedding服务商/v1
-AMEM_EMBEDDING_API_KEY=你的embedding密钥
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=服务商实际支持的embedding模型ID
+EMBEDDING_BASE_URL=https://你的embedding服务商/v1
+EMBEDDING_API_KEY=你的embedding密钥
 # 仅在服务商支持 dimensions 参数时设置；否则删除或注释。
-# AMEM_EMBEDDING_DIMS=1024
-AMEM_EMBEDDING_BATCH_SIZE=10
+# EMBEDDING_DIMS=1024
+EMBEDDING_BATCH_SIZE=10
 ```
 
 API 模式发送字符串列表，默认每批最多 10 条。聊天与 embedding 的地址、密钥独立配置，
@@ -143,9 +144,11 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 代码位置：
 
 - `src/langmem_eval/methods/amem/backend.py`：写入演化与检索算法。
-- `src/langmem_eval/methods/amem/config.py`：设置和公开配置记录。
+- `src/langmem_eval/configuration.py`：命令行、dotenv 的统一解析和共享 embedding 设置。
+- `src/langmem_eval/embeddings.py`：A-Mem 与 LangMem 共用的本地/API embedding 客户端。
+- `src/langmem_eval/methods/amem/config.py`：A-Mem 算法设置和公开配置记录。
 - `src/langmem_eval/methods/amem/memory.py`：笔记结构与序列化。
-- `src/langmem_eval/methods/amem/clients.py`：embedding/LLM 边界。
+- `src/langmem_eval/methods/amem/clients.py`：A-Mem 结构化 LLM 输出边界。
 - `src/langmem_eval/methods/amem/prompts.py`：固定上游提示词和 schema。
 - `src/langmem_eval/methods/amem/__init__.py`：方法注册入口。
 - `src/langmem_eval/adapter.py`：统一回答和 trace。

@@ -29,7 +29,10 @@ uv run langmem-eval --systems langmem --benchmark locomo --num-samples 1 --llm-m
 成本按阶段报告，裁判独立统计；未观测到的费用标记为未知。
 原生 baseline 保留自身协议，结果会明确区分，详见 [实验配置与成本记录](docs/development.md)。
 
-根目录 `.env` 可填写 `OPENAI_API_KEY=...`，入口会自动加载，已有环境变量优先。
+根目录 `.env` 可填写 `OPENAI_API_KEY=...`。参数优先级为：命令行 > `.env` > 进程环境变量 > 默认值。
+聊天使用 `--llm-model`、`--llm-base-url`，嵌入使用 `--embedding-provider`、`--embedding-model` 等。
+A-Mem 和 LangMem 共用 `EMBEDDING_*`；运行 `uv run langmem-eval --systems amem --show-config`
+查看脱敏后的最终配置，不调用模型。完整参数表见 [统一配置](docs/configuration.md)。
 额外 baseline 按需安装，例如 `uv sync --extra dev --extra mem0`。
 可选组：`amem`、`mem0`、`simplemem`、`graphiti`、`memu`、`charts`、`training`。
 这些组已纳入统一依赖解析，但未逐个运行；默认安装仅验证 LangMem 评测流程。
@@ -55,7 +58,7 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 - `src/langmem_eval/`：整合代码与方法注册机制。
 - `src/agents_memory/`：数据加载、baseline、评测、成本统计与实验运行器。
 - `tests/`：测试；根目录 pyproject.toml 与 uv.lock 统一管理依赖。
-- `scripts/`：抽样工具及兼容运行入口，实验主体在 `agents_memory.runner`。
+- `scripts/`：抽样和离线验收工具；评测使用 `langmem-eval`，实验主体在 `agents_memory.runner`。
 - `third_party/memeval/`：上游许可证、来源文档与示例图，不是第二套运行项目。
 - 每个方法集中在 `src/langmem_eval/methods/<方法名>/`，包含注册、算法及所需配置/提示词。
 - `src/langmem_eval/interfaces.py` 定义共享接口；`examples/method_template/` 可复制为新方法起点。

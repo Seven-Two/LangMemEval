@@ -12,7 +12,7 @@ os.chdir(ROOT)
 env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHON_DOTENV_DISABLED="1")
 # Make local secrets and paid providers unavailable to all child tests.
 for key in list(env):
-    if key.endswith("API_KEY") or key.startswith(("AMEM_", "EVAL_", "LLM_")):
+    if key.endswith("API_KEY") or key.startswith(("AMEM_", "EMBEDDING_", "EVAL_", "LLM_")):
         env.pop(key, None)
 env["OPENAI_API_KEY"] = "offline-test-placeholder"
 env["OPENAI_BASE_URL"] = "http://127.0.0.1:1/v1"

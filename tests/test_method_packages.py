@@ -1,4 +1,4 @@
-"""Package discovery, extension template and backwards-compatible imports."""
+"""Package discovery, extension template and canonical import paths."""
 import importlib
 import os
 from pathlib import Path
@@ -56,18 +56,11 @@ def test_copyable_template_registers_and_isolates_state(tmp_path, monkeypatch):
                 sys.modules.pop(name)
 
 
-def test_old_imports_resolve_to_single_canonical_implementation():
-    from langmem_eval import amem, backend, benchmark, _amem_prompts
-    from langmem_eval.interfaces import MemoryBackend
-    from langmem_eval.methods.amem.backend import AMemBackend
-    from langmem_eval.methods.amem.config import AMemSettings
-    from langmem_eval.methods.amem import prompts
-    from langmem_eval.methods.langmem.backend import LangMemBackend
-    assert amem.AMemBackend is AMemBackend
-    assert amem.AMemSettings is AMemSettings
-    assert backend.LangMemBackend is LangMemBackend
-    assert benchmark.Session is Session
-    assert benchmark.MemoryBackend is MemoryBackend
-    assert _amem_prompts.ANALYSIS_PROMPT is prompts.ANALYSIS_PROMPT
-    assert _amem_prompts.EVOLUTION_PROMPT is prompts.EVOLUTION_PROMPT
-    assert _amem_prompts.QUERY_PROMPT is prompts.QUERY_PROMPT
+def test_removed_compatibility_paths_are_not_importable():
+    from langmem_eval import benchmark, adapter
+    for name in ("langmem_eval.amem", "langmem_eval.backend", "langmem_eval._amem_prompts",
+                 "agents_memory.token_tracker"):
+        assert importlib.util.find_spec(name) is None
+    assert not hasattr(benchmark, "Session")
+    assert not hasattr(benchmark, "MemoryBackend")
+    assert not hasattr(adapter, "run")

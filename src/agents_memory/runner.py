@@ -11,7 +11,6 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from tqdm import tqdm
 
 from agents_memory.benchmarks import BENCHMARKS
@@ -22,15 +21,16 @@ from agents_memory.usage import get_report, get_stats, get_stats_by_model, reset
 from agents_memory.paths import results_dir
 from langmem_eval.protocol import AnswerProtocol
 from langmem_eval.registry import discover_methods
+from langmem_eval.configuration import add_model_arguments, configured_environment, public_model_config
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", choices=list(BENCHMARKS), default="locomo")
+    parser.add_argument("--benchmark", choices=list(BENCHMARKS))
     parser.add_argument("--split", help="Benchmark split, e.g. oracle/s/m")
-    parser.add_argument("--systems", default="all")
-    parser.add_argument("--num-samples", type=int, default=10)
+    parser.add_argument("--systems")
+    parser.add_argument("--num-samples", type=int)
     parser.add_argument("--llm-model")
-    parser.add_argument("--skip-judge", action="store_true")
+    parser.add_argument("--skip-judge", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--output-dir", help="Default: EVAL_RESULTS_DIR or ./results")
     parser.add_argument("--data-file", help="Custom MemEval-normalized JSON")
     parser.add_argument("--protocol", choices=("auto", "locomo", "longmemeval"),
@@ -43,6 +43,7 @@ def parse_args():
     parser.add_argument("--answer-style", choices=("concise", "complete"))
     parser.add_argument("--empty-context", choices=("abstain", "answer"))
     parser.add_argument("--abstention-text")
+    add_model_arguments(parser)
     return parser.parse_args()
 
 
@@ -54,20 +55,17 @@ def _write_json(path, value):
 
 def main():
     args = parse_args()
-    load_dotenv()
+    try:
+        with configured_environment(args) as sources:
+            return _run(args, sources)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def _run(args, sources):
     if args.num_samples < 1:
         raise SystemExit("--num-samples must be positive")
-    overrides = {
-        "EVAL_PROTOCOL": args.protocol, "EVAL_CONTEXT_TOKENS": args.context_tokens,
-        "EVAL_TOKENIZER": args.tokenizer, "EVAL_TOP_K": args.top_k,
-        "EVAL_MAX_OUTPUT_TOKENS": args.max_output_tokens,
-        "EVAL_TEMPERATURE": args.answer_temperature, "EVAL_ANSWER_STYLE": args.answer_style,
-        "EVAL_EMPTY_CONTEXT": args.empty_context, "EVAL_ABSTENTION_TEXT": args.abstention_text,
-    }
-    for key, value in overrides.items():
-        if value is not None:
-            os.environ[key] = str(value)
-    llm_model = args.llm_model or os.getenv("LLM_MODEL", "gpt-4.1")
+    llm_model = args.llm_model
     run_judge = not args.skip_judge
     system_names = list(SYSTEMS) if args.systems.lower() == "all" else [s.strip() for s in args.systems.split(",")]
     if not system_names or len(set(system_names)) != len(system_names):
@@ -75,15 +73,36 @@ def main():
     unknown = [s for s in system_names if s not in SYSTEMS]
     if unknown:
         raise SystemExit(f"Unknown/unavailable systems: {unknown}. Available: {list(SYSTEMS)}")
+    if args.benchmark not in BENCHMARKS:
+        raise ValueError("Unknown EVAL_BENCHMARK")
     bench = BENCHMARKS[args.benchmark]
     categories = bench.get("category_names", CATEGORY_NAMES)
     judge_fn = bench.get("judge_fn")
     judge_model = (os.getenv("LONGMEMEVAL_JUDGE_MODEL", "gpt-4o") if judge_fn == "longmemeval"
                    else os.getenv("JUDGE_MODEL", "gpt-5.2")) if run_judge else None
     protocol = AnswerProtocol.from_env(judge_fn)
+    registered = discover_methods()
+    if any(getattr(args, key, None) is not None for key in (
+        "embedding_provider", "embedding_model", "embedding_api_key", "embedding_base_url",
+        "embedding_dims", "embedding_batch_size", "embedding_device", "embedding_revision",
+        "embedding_local_files_only")) and any(s not in registered for s in system_names):
+        raise ValueError("Shared --embedding-* options apply to registered methods only; "
+                         "configure native baseline embeddings in their own adapters")
+    model_config = public_model_config(llm_model) if any(s in registered for s in system_names) else None
+    amem_config = None
+    if "amem" in system_names:
+        from langmem_eval.methods.amem.config import AMemSettings
+        amem_config = AMemSettings.from_env().public_config()
+    if args.show_config:
+        print(json.dumps({"systems": system_names, "benchmark": args.benchmark,
+                          "num_samples": args.num_samples, "skip_judge": args.skip_judge,
+                          "models": model_config, "answer_protocol": protocol.to_dict(),
+                          "amem": amem_config, "sources": sources,
+                          "embedding_scope": "registered methods; native adapters retain their own configuration"},
+                         ensure_ascii=False, indent=2))
+        return
     # Fail before paid calls if the selected encoding cannot be loaded.
     from langmem_eval.benchmark import token_encoding
-    registered = discover_methods()
     if any(s in registered for s in system_names):
         token_encoding(protocol.tokenizer)
     if args.data_file:
@@ -131,6 +150,8 @@ def main():
             "llm_model": llm_model, "judge_model": judge_model,
             "adapter_protocol": "unified_v1" if unified else "native",
             "answer_protocol": protocol.to_dict() if unified else None,
+            "models": model_config if unified else None,
+            "configuration_sources": sources,
             "context_trace": "per_question" if unified else "not_instrumented",
             "phase_instrumentation": "write/retrieve/answer/judge" if unified else "partial; inspect unclassified",
         }

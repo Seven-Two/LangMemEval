@@ -13,6 +13,9 @@ def test_wheel_runner_outside_checkout(tmp_path):
     if not wheels:
         pytest.skip("Run uv build --wheel first")
     with zipfile.ZipFile(max(wheels, key=lambda p: p.stat().st_mtime)) as archive:
+        removed = {"langmem_eval/amem.py", "langmem_eval/backend.py",
+                   "langmem_eval/_amem_prompts.py", "agents_memory/token_tracker.py"}
+        assert removed.isdisjoint(archive.namelist())
         for name in ("agents_memory/runner.py", "agents_memory/paths.py", "agents_memory/LICENSE",
                      "agents_memory/NOTICE", "langmem_eval/cli.py"):
             assert name in archive.namelist()

@@ -10,9 +10,10 @@ def test_registered_plugin_and_real_scoring(monkeypatch):
     import openai
     import langmem_eval.methods.langmem.backend
     from agents_memory.systems import SYSTEMS
-    from langmem_eval.adapter import run
+    from langmem_eval.adapter import run_method
 
-    assert SYSTEMS["langmem"]["fn"] is run
+    assert SYSTEMS["langmem"]["fn"].func is run_method
+    assert SYSTEMS["langmem"]["fn"].args == ("langmem",)
     assert all("prob" not in name for name in SYSTEMS if name.startswith("langmem"))
 
     writes = []

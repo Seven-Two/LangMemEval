@@ -1,6 +1,5 @@
 """One entry point for the editable LangMem + MemEval research workspace."""
 import sys
-from pathlib import Path
 
 
 def main():
@@ -9,9 +8,6 @@ def main():
         for name, spec in sorted(discover_methods().items()):
             print(f"{name}: {spec.architecture}")
         return
-    from dotenv import load_dotenv
-
-    load_dotenv(Path.cwd() / ".env")
     from agents_memory.runner import main as run_benchmark
     run_benchmark()
 
