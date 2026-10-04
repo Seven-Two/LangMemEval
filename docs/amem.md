@@ -78,8 +78,8 @@ embedding 配置现在由 A-Mem 和 LangMem 共用，详见 [统一配置](confi
 commit，可进一步固定权重。本实现没有自动选择最新 revision 或声称已固定权重版本。
 
 若聊天服务不支持严格 JSON schema，可显式设 `AMEM_RESPONSE_FORMAT=json_object`；
-若连 JSON 模式也不支持，可设 `prompt`。三种模式都检查输出结构，失败会计入失败样本，
-不会悄悄生成替代记忆。对于支持此选项的千问服务，可添加：
+若连 JSON 模式也不支持，可设 `prompt`。三种模式都检查输出结构；演化 JSON 无法解析时
+按上游策略跳过本次演化并记录，其他结构错误仍显式失败，不生成替代记忆。对于支持此选项的千问服务，可添加：
 
 ```dotenv
 LLM_EXTRA_BODY={"enable_thinking":false}
@@ -150,7 +150,7 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 | 链接计数 | 修复上游关联展开中可能返回 k+1 条的边界问题，最多 k 条 |
 | 链接身份 | 将合法的邻居索引映射为稳定笔记 UUID，拒绝越界及非候选邻居 |
 | 邻居更新长度 | 与固定上游一致：按候选邻居顺序更新 `min(邻居数, 返回标签条数)` 条；忽略多余条目，缺少 context 时保留旧值；长度不匹配写入日志 |
-| 失败处理 | 非法 JSON、截断响应、非法向量显式失败；一条笔记更新原子提交，整段对话失败保留题目分母 |
+| 失败处理 | 演化 JSON 解码失败时跳过本次演化，保留分析后的新笔记；演化截断响应先尝试解析；分析/查询的截断或非法 JSON、非法字段结构/链接/向量及网络错误仍显式失败；单条笔记原子提交 |
 | 索引重建 | 重用相同 embedding 实例、批量重编码，省略重建前会被丢弃的新笔记单独编码；不重载模型 |
 | 模型接口 | OpenAI 兼容聊天；可选远程 embedding；并非移植上游所有 Ollama/sglang 控制器 |
 | 持久化和赛事 | 每段对话使用独立内存状态；未接入 AML 的持久化 Add/Search 服务，也未实现断点恢复 |
@@ -180,6 +180,48 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 增加 `neighbor_update_policy=upstream_positional_prefix`，便于区分修复前后的实验。
 单条笔记的原子写入、非法链接校验及其他显式失败策略仍保留；这仅对齐邻居长度处理，
 不表示整个框架与上游评测协议完全一致。
+
+### 演化输出截断与 JSON 解析失败
+
+当前实现标识为 `amem_original_json_unified_v3`。默认 `AMEM_MAX_OUTPUT_TOKENS=1000`
+沿用固定上游 OpenAI 控制器的单次输出上限，并不表示 1000 对所有模型都是最佳预算。
+处理流程对齐上游 `process_memory` 的 JSON 解码失败策略：
+
+- 演化响应 `finish_reason=length` 时记录截断，但仍尝试解析；完整且通过结构校验的 JSON 可以正常应用。
+- 按上游方式提取第一个 `{` 到最后一个 `}` 之间的内容，不补全或猜测被截断的 JSON。
+- 仅 JSON 解码失败时跳过这次演化：不改旧邻居、不增加成功演化计数，使用已完成分析的新笔记进行向量编码并保存；后续消息和问答继续。
+- 不增加纠正请求，不自动提高预算；SDK 原有网络重试策略不变。
+- 字段缺失/类型错误、非法链接、网络与 embedding 错误仍显式报错；分析和查询改写的截断处理不变。若跳过演化后新笔记编码失败，仍不提交该笔记。
+
+日志新增 `amem.response.truncated`、`amem.evolution.skipped` 和 `amem.evolution.stats`。
+截断和跳过事件携带原调用的 `request_id`、`response_id`、`finish_reason`，以及会话/消息位置；
+精简终端不会逐条打印这些事件，完整文件日志仍保留。日志不保存响应正文。
+
+结果中每题的 `answer_trace.method_config` 增加：
+
+```json
+{
+  "evolution_failure_policy": "upstream_skip_invalid_json",
+  "evolution_stats": {"attempts": 24, "truncated": 1, "skipped_invalid_json": 1}
+}
+```
+
+以上数字仅为示例。统计按 conversation 独立累计，并复制到每题 trace；汇总时不要将同一对话
+重复计算。`truncated` 只数演化响应返回 `length` 的次数，`skipped_invalid_json` 包括未截断但
+JSON 无效的响应；两者不一定相等。统计记录发生过的尝试，即使后续编码失败也不会回滚，
+与 `snapshot().evolution_count` 的成功演化次数含义不同。若写入阶段因其他错误终止，
+最新统计仍可在日志中查看；未进入问答的失败题不含此方法 trace。
+
+调试当前模型的预算可在命令末尾添加 `--amem-max-output-tokens 2048`，或在 `.env` 中设置
+`AMEM_MAX_OUTPUT_TOKENS=2048`；命令行优先。它不同于最终回答的 `--max-output-tokens`。
+建议在固定开发子集对比 1000/2048 的截断率、跳过率、问答效果、成本和耗时，再冻结正式实验配置。
+2048 是待验证的工程选项，不是论文保证的最佳值。
+
+矩池云端可执行新增离线回归（无真实模型请求）：
+
+```bash
+PYTHON_DOTENV_DISABLED=1 uv run --locked --extra dev python -m pytest -q tests/test_amem_evolution_fallback.py tests/test_amem_contract.py tests/test_amem_extra.py tests/test_amem_neighbor_updates.py tests/test_llm_diagnostics.py
+```
 
 ## 4. 查看结果与继续开发
 

@@ -131,15 +131,21 @@ def _thinking_options(extra):
     return result
 
 
-def chat_completion(client, *, operation, **kwargs):
+def chat_completion(client, *, operation, diagnostic_metadata=None, **kwargs):
     """Return the original response; trace lengths before callers parse/strip it.
 
     Injected clients without DiagnosticHttpClient still get output diagnostics,
     but their HTTP attempt/retry counts are explicitly unknown.
+    Optional diagnostic_metadata receives correlation IDs and finish_reason for
+    downstream parsing logs; it is never forwarded to the provider.
     """
     if kwargs.get("stream"):
         raise ValueError("chat_completion diagnostics require non-streaming responses")
     trace = _Request()
+    request_id = uuid4().hex
+    if diagnostic_metadata is not None:
+        diagnostic_metadata.clear()
+        diagnostic_metadata["request_id"] = request_id
     observed = isinstance(getattr(client, "_client", None), DiagnosticHttpClient)
     token = _request.set(trace)
     started = perf_counter()
@@ -150,7 +156,7 @@ def chat_completion(client, *, operation, **kwargs):
                 "retry_observation": "sdk_http_send" if observed else "unavailable"}
 
     try:
-        with stage("llm.api", request_id=uuid4().hex, operation=operation, model=kwargs.get("model")):
+        with stage("llm.api", request_id=request_id, operation=operation, model=kwargs.get("model")):
             event("llm.request", max_output_tokens=kwargs.get("max_completion_tokens", kwargs.get("max_tokens")),
                   response_format=_field(kwargs.get("response_format"), "type"),
                   thinking_options=_thinking_options(kwargs.get("extra_body")),
@@ -164,6 +170,9 @@ def chat_completion(client, *, operation, **kwargs):
                       elapsed_s=round(perf_counter() - started, 3), **counts())
                 raise
             choices = [_choice_metadata(choice) for choice in _field(response, "choices", [])]
+            if diagnostic_metadata is not None:
+                diagnostic_metadata.update(response_id=_field(response, "id"),
+                    finish_reason=choices[0]["finish_reason"] if choices else None)
             usage = _usage_dict(_field(response, "usage"))
             event("llm.response", elapsed_s=round(perf_counter() - started, 3),
                   provider_request_id=_field(response, "_request_id"),

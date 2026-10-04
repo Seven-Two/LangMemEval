@@ -19,12 +19,12 @@ from ...interfaces import Session
 from ...model_api import validate_base_url
 from . import prompts
 from ...embeddings import APIEmbedder, LocalEmbedder
-from .clients import OpenAIController, _validate
+from .clients import InvalidJSONResponse, OpenAIController, _validate
 from .config import AMemSettings
 from .memory import Note
 
 UPSTREAM_COMMIT = "0c8039f28fdcc08189a23c07a3437d9d2482f9c2"
-IMPLEMENTATION = "amem_original_json_unified_v2"
+IMPLEMENTATION = "amem_original_json_unified_v3"
 PROMPT_SHA256 = hashlib.sha256((prompts.ANALYSIS_PROMPT + prompts.EVOLUTION_PROMPT
                                + prompts.QUERY_PROMPT).encode()).hexdigest()
 
@@ -40,6 +40,7 @@ class AMemBackend:
         self.notes: list[Note] = []
         self.vectors = None
         self.evolution_count = 0
+        self.evolution_stats = {"attempts": 0, "truncated": 0, "skipped_invalid_json": 0}
         self.last_retrieval = None
 
     def describe(self):
@@ -47,6 +48,8 @@ class AMemBackend:
                 "prompt_sha256": PROMPT_SHA256, "llm_model": self.model,
                 "settings": self.settings.public_config(), "note_count": len(self.notes),
                 "neighbor_update_policy": "upstream_positional_prefix",
+                "evolution_failure_policy": "upstream_skip_invalid_json",
+                "evolution_stats": dict(self.evolution_stats),
                 "embedding_dimensions_actual": self.vectors.shape[1] if self.vectors is not None else None,
                 "retrieval_unit": "seed_plus_linked_notes", "answer_protocol": "framework_unified"}
 
@@ -70,6 +73,26 @@ class AMemBackend:
         if np.any(np.linalg.norm(vectors, axis=1) == 0):
             raise ValueError("A-Mem embeddings must be nonzero")
         return vectors
+
+    def _evolve(self, note, neighbors, neighbor_number):
+        self.evolution_stats["attempts"] += 1
+        with stage("amem.evolve", model=self.model, neighbors=neighbor_number):
+            try:
+                return self._complete(prompts.EVOLUTION_PROMPT.format(context=note.context,
+                    content=note.content, keywords=note.keywords,
+                    nearest_neighbors_memories=neighbors, neighbor_number=neighbor_number),
+                    prompts.EVOLUTION_SCHEMA)
+            except InvalidJSONResponse:
+                self.evolution_stats["skipped_invalid_json"] += 1
+                event("amem.evolution.skipped", reason="invalid_json",
+                      policy="upstream_skip_invalid_json",
+                      **getattr(self.controller, "last_response_metadata", {}))
+                return None
+            finally:
+                metadata = getattr(self.controller, "last_response_metadata", {})
+                if metadata.get("finish_reason") == "length":
+                    self.evolution_stats["truncated"] += 1
+                event("amem.evolution.stats", **self.evolution_stats)
 
     def _search(self, query, k):
         if not self.notes:
@@ -105,15 +128,13 @@ class AMemBackend:
                             f"\t memory content: {self.notes[i].content}\t memory context: {self.notes[i].context}"
                             f"\t memory keywords: {self.notes[i].keywords}\t memory tags: {self.notes[i].tags}\n"
                             for i in indices)
-        with stage("amem.evolve", model=self.model, neighbors=len(indices)):
-            evolution = self._complete(prompts.EVOLUTION_PROMPT.format(context=note.context, content=note.content,
-                keywords=note.keywords, nearest_neighbors_memories=neighbors, neighbor_number=len(indices)),
-                prompts.EVOLUTION_SCHEMA)
-        event("amem.evolution.decision", should_evolve=evolution["should_evolve"])
+        evolution = self._evolve(note, neighbors, len(indices))
+        should_evolve = evolution is not None and evolution["should_evolve"]
+        event("amem.evolution.decision", should_evolve=should_evolve, skipped=evolution is None)
         # Atomic note write: no memory/index changes become visible before all steps succeed.
         updated = deepcopy(self.notes)
         count = self.evolution_count
-        if evolution["should_evolve"]:
+        if should_evolve:
             if any(a not in {"strengthen", "update_neighbor"} for a in evolution["actions"]):
                 raise ValueError("A-Mem returned an unknown evolution action")
             if "strengthen" in evolution["actions"]:
@@ -139,7 +160,7 @@ class AMemBackend:
                         updated[indices[offset]].context = contexts[offset]
             count += 1
         updated.append(note)
-        if evolution["should_evolve"] and count % self.settings.evolution_threshold == 0:
+        if should_evolve and count % self.settings.evolution_threshold == 0:
             with stage("amem.index.rebuild", notes=len(updated)):
                 vectors = self._encode([n.indexed_text(consolidated=True) for n in updated])
         else:
