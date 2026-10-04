@@ -6,6 +6,7 @@ import re
 
 from openai import OpenAI
 from agents_memory.usage import phase
+from agents_memory.diagnostics import failure
 
 JUDGE_PROMPT = """You are evaluating a memory retrieval system.
 
@@ -241,6 +242,7 @@ def evaluate_longmemeval(
             raise ValueError("Malformed binary judge response")
         correct = int(normalized == "yes")
     except Exception as e:
+        failure("judge.longmemeval")
         return {"longmemeval_correct": None, "judge_status": "error",
                 "judge_error": {"type": type(e).__name__}}
 
@@ -278,6 +280,7 @@ def evaluate_with_judge(question: str, expected: str, predicted: str) -> dict:
             "judge_status": "ok",
         }
     except Exception as e:
+        failure("judge.locomo")
         return {
             "judge_relevant": None,
             "judge_complete": None,

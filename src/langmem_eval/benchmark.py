@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, asdict
 from functools import lru_cache
 from . import interfaces
+from agents_memory.diagnostics import event, stage
 
 
 def extract_sessions(conv: dict) -> list[interfaces.Session]:
@@ -30,8 +31,16 @@ def extract_sessions(conv: dict) -> list[interfaces.Session]:
 
 
 def build_memory(conv: dict, backend: interfaces.MemoryBackend) -> None:
-    for session in extract_sessions(conv):
-        backend.ingest(session)
+    sessions = extract_sessions(conv)
+    total = sum(len(session.messages) for session in sessions)
+    event("write.plan", sessions=len(sessions), messages=total)
+    completed = 0
+    for index, session in enumerate(sessions, 1):
+        with stage("write.session", session=session.id, session_index=index,
+                   session_total=len(sessions), messages=len(session.messages)):
+            backend.ingest(session)
+        completed += len(session.messages)
+        event("write.progress", messages_done=completed, messages_total=total)
 
 
 @lru_cache(maxsize=8)

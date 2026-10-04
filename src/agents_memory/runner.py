@@ -9,8 +9,6 @@ import json
 import os
 from pathlib import Path
 import re
-import sys
-import traceback
 from uuid import uuid4
 
 from tqdm import tqdm
@@ -21,6 +19,7 @@ from agents_memory.systems import SYSTEMS
 from agents_memory.experiment import compute_summary, failed_results, freeze_manifest, normalize_results
 from agents_memory.usage import get_report, get_stats, get_stats_by_model, reset, start
 from agents_memory.paths import results_dir
+from agents_memory.diagnostics import event, run_logging, stage
 from langmem_eval.protocol import AnswerProtocol
 from langmem_eval.registry import discover_methods
 from langmem_eval.configuration import add_model_arguments, configured_environment, public_model_config
@@ -50,16 +49,25 @@ def parse_args():
 
 
 def _write_json(path, value):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-    temporary.replace(path)
+    with stage("results.save", path=str(path)):
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+        temporary.replace(path)
 
 
 def main():
     args = parse_args()
     try:
         with configured_environment(args) as sources:
-            return _run(args, sources)
+            if args.show_config:
+                return _run(args, sources)
+            output_dir = Path(args.output_dir) if args.output_dir else results_dir()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            model_tag = re.sub(r"[^A-Za-z0-9_-]", "_", args.llm_model)
+            args.run_tag = f"{args.benchmark}_{model_tag}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
+            with run_logging(output_dir / f"run_{args.run_tag}.log"):
+                with stage("run", benchmark=args.benchmark, systems=args.systems, model=args.llm_model):
+                    return _run(args, sources)
     except ValueError as exc:
         raise SystemExit(str(exc)) from None
 
@@ -106,17 +114,19 @@ def _run(args, sources):
     # Fail before paid calls if the selected encoding cannot be loaded.
     from langmem_eval.benchmark import token_encoding
     if any(s in registered for s in system_names):
-        token_encoding(protocol.tokenizer)
-    if args.data_file:
-        data = json.loads(Path(args.data_file).read_text(encoding="utf-8"))
-        conversations = (data if isinstance(data, list) else [data])[:args.num_samples]
-    else:
-        conversations = bench["download"](split=args.split, num_samples=args.num_samples)
+        with stage("tokenizer.load", tokenizer=protocol.tokenizer):
+            token_encoding(protocol.tokenizer)
+    with stage("dataset.load", source=args.data_file or args.benchmark, num_samples=args.num_samples):
+        if args.data_file:
+            data = json.loads(Path(args.data_file).read_text(encoding="utf-8"))
+            conversations = (data if isinstance(data, list) else [data])[:args.num_samples]
+        else:
+            conversations = bench["download"](split=args.split, num_samples=args.num_samples)
     conversations, manifest = freeze_manifest(conversations)
+    event("dataset.ready", conversations=len(conversations), questions=manifest["n_questions"])
     output_dir = Path(args.output_dir) if args.output_dir else results_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-    model_tag = re.sub(r"[^A-Za-z0-9_-]", "_", llm_model)
-    run_tag = f"{args.benchmark}_{model_tag}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
+    run_tag = args.run_tag
     manifest_path = output_dir / f"manifest_{run_tag}.json"
     _write_json(manifest_path, manifest)
     print(f"Benchmark: {bench['name']}; questions: {manifest['n_questions']}; judge: {judge_model}")
@@ -131,24 +141,26 @@ def _run(args, sources):
         results = []
         checkpoints = output_dir / f"{name}_{run_tag}_progress.jsonl"
         with checkpoints.open("w", encoding="utf-8") as progress:
-            for conv in tqdm(conversations, desc=name):
+            for index, conv in enumerate(tqdm(conversations, desc=name), 1):
                 try:
-                    returned = info["fn"](
-                        deepcopy(conv), llm_model, run_judge,
-                        category_names=categories, judge_fn=judge_fn)
-                    rows = normalize_results(conv, returned, categories, run_judge, judge_fn)
+                    with stage("conversation", method=name, conversation=conv["sample_id"],
+                               conversation_index=index, conversation_total=len(conversations)):
+                        returned = info["fn"](
+                            deepcopy(conv), llm_model, run_judge,
+                            category_names=categories, judge_fn=judge_fn)
+                        rows = normalize_results(conv, returned, categories, run_judge, judge_fn)
                 except Exception as exc:
-                    tqdm.write(f"  {name} / {conv['sample_id']}: {type(exc).__name__}", file=sys.stderr)
-                    # Keep the original traceback and chained cause visible while
-                    # still recording failed questions in the fixed denominator.
-                    traceback.print_exc()
                     rows = failed_results(conv, categories, run_judge,
                                           stage="conversation", error_type=type(exc).__name__)
                 results.extend(rows)
                 for row in rows:
                     progress.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
                 progress.flush()
+                event("checkpoint.saved", method=name, conversation=conv["sample_id"],
+                      rows=len(rows), path=str(checkpoints))
         summary = compute_summary(results, run_judge, judge_fn)
+        event("method.summary", method=name, run_status=summary["run_status"],
+              coverage=summary["coverage"], f1=summary["overall_f1_mean"])
         usage = get_report()
         config = {
             "architecture": info["architecture"], "infrastructure": info["infrastructure"],
@@ -157,6 +169,7 @@ def _run(args, sources):
             "answer_protocol": protocol.to_dict() if unified else None,
             "models": model_config if unified else None,
             "configuration_sources": sources,
+            "runtime_log": f"run_{run_tag}.log",
             "context_trace": "per_question" if unified else "not_instrumented",
             "phase_instrumentation": "write/retrieve/answer/judge" if unified else "partial; inspect unclassified",
         }

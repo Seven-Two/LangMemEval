@@ -109,3 +109,55 @@ A-Mem 专属算法设置仍保留 `AMEM_` 前缀，例如
 新方法可直接用 `EmbeddingSettings.from_env()` 和 `create_embedder(settings)` 获取共享配置与客户端。
 `AML_*` 属于独立的比赛服务，当前请求没有更改其配置协议；不能用它们配置 baseline。
 结果中的 `config.models` 保存共享模型配置（已脱敏），便于确认实验实际使用的设置。
+
+## 运行日志与进度
+
+正常评测默认同时向终端和 `--output-dir` 下的 `run_<运行标识>.log` 写入日志，
+无需额外参数。日志与同次运行的 manifest、results 文件共用运行标识；结果 JSON
+中的 `config.runtime_log` 指向对应日志。`--show-config` 不创建日志、不加载模型。
+
+日志记录时间、阶段、方法和对话编号，以及适用的 session、消息/题目进度和耗时：
+
+- `dataset.load` / `tokenizer.load`：数据和分词器加载。
+- `backend.initialize` / `embedding.load`：方法初始化、嵌入模型名称和实际设备。
+- `write.plan` / `write.session` / `write.progress`：历史会话和消息数量、完成进度。
+- A-Mem 的 `amem.write.note`、`amem.analyze`、`amem.neighbors`、`amem.evolve`：
+  每条历史消息的分析、邻居检索、演化；记录已保存记忆数量和索引重建。
+- `embedding.encode` / `embedding.api`：本地嵌入和远程嵌入批次。
+- `question.answer` / `retrieve` / `amem.query.rewrite` / `answer.api`：
+  逐题检索、查询改写和回答；`context.selected` 记录候选数、选中数与上下文 Token 数。
+- `judge` / `question.result`：裁判阶段与逐题状态、F1。
+- `checkpoint.saved` / `results.save` / `method.summary`：落盘位置、覆盖率与汇总状态。
+
+阶段状态为 `start`、`done`、`failed` 或 `stopped`。日志监测线程每 30 秒检查一次，
+当前最内层阶段持续超过 30 秒时输出 `waiting` 和已用时间。这表示该调用尚未返回，
+不是已确认死锁，也不能区分 SDK 内部的网络等待、重试与服务端排队。
+它不设置请求超时、不发起重试、不自动重启实验。
+
+日志逐条刷新，发生异常时保存完整 traceback 和原因链；同一异常沿嵌套阶段传播时只
+打印一次堆栈。按 Ctrl+C 中断会记录 `stopped`，不会把该阶段记为完成。
+失败题目的计数、覆盖率和运行退出码保持原有行为。
+
+例如，在 Linux 另一个终端查看启动输出中给出的日志路径：
+
+```bash
+tail -f results/amem-locomo-first/run_<运行标识>.log
+```
+
+日志主动记录阶段元数据，不输出 API 密钥、请求头、请求体或对话/问题正文；实际回答
+上下文仍保存在结果 JSON 中。第三方库的原始进度条不是这个日志文件的内容；异常文本
+来自第三方时可能包含其请求信息，分享日志前应检查。
+细粒度记忆日志覆盖统一适配器（A-Mem、LangMem），其中 A-Mem 额外提供逐消息子步骤。
+原生 baseline 的内部写入流程仍由各自实现控制，框架记录其对话边界及共享问答/裁判阶段。
+
+扩展新方法时，可以直接使用统一日志接口：
+
+```python
+from agents_memory.diagnostics import stage, event
+
+with stage("my_method.retrieve", top_k=10):
+    records = retrieve_records()
+    event("retrieval.ready", count=len(records))
+```
+
+不要把密钥、完整配置字典、提示词或记忆正文传给日志字段。

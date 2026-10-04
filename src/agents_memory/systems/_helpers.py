@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-import sys
-import traceback
+from agents_memory.diagnostics import event, failure, stage
 
 from agents_memory.usage import phase
 
@@ -49,13 +48,13 @@ async def _qa_results_async(
 
         error = None
         try:
-            predicted = (await answer_fn(question)) if is_async else answer_fn(question)
-            if not isinstance(predicted, str) or not predicted.strip():
-                raise ValueError("Answer function returned empty or non-string output")
+            with stage("question.answer", question_index=i, question_total=len(qa_pairs)):
+                predicted = (await answer_fn(question)) if is_async else answer_fn(question)
+                if not isinstance(predicted, str) or not predicted.strip():
+                    raise ValueError("Answer function returned empty or non-string output")
         except Exception as err:
             error = {"stage": "answer", "type": type(err).__name__}
-            print(f"    {sample_id} / Q{i}: answer failed", file=sys.stderr)
-            traceback.print_exc()
+            failure("question.answer", conversation=sample_id, question_index=i)
             predicted = ""
 
         # An execution error is never a correct abstention, even with empty truth.
@@ -84,7 +83,7 @@ async def _qa_results_async(
 
         if run_judge and not error:
             try:
-                with phase("judge"):
+                with phase("judge"), stage("judge", question_index=i, question_total=len(qa_pairs)):
                     if judge_fn == "longmemeval":
                         scores = evaluate_longmemeval(
                             question, ground_truth, predicted,
@@ -94,13 +93,14 @@ async def _qa_results_async(
                 row.update(scores)
                 row["judge_status"] = scores.get("judge_status", "ok")
             except Exception as err:
-                print(f"    {sample_id} / Q{i}: judge failed", file=sys.stderr)
-                traceback.print_exc()
+                failure("judge", conversation=sample_id, question_index=i)
                 row.update(judge_status="error", judge_error={"type": type(err).__name__})
             if row["judge_status"] == "error":
                 row["status"] = "error"
 
         results.append(row)
+        event("question.result", question_index=i, question_total=len(qa_pairs),
+              answer_status=row["answer_status"], judge_status=row["judge_status"], f1=f1)
 
         if i % 20 == 0:
             print(f"    QA {i}/{len(qa_pairs)} - F1={f1:.3f}")

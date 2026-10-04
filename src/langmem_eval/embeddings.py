@@ -1,6 +1,7 @@
 """Shared local/API embedding clients for registered memory methods."""
 from functools import lru_cache
 import numpy as np
+from agents_memory.diagnostics import stage
 
 from .configuration import EmbeddingSettings
 
@@ -11,7 +12,8 @@ def _load_local_model(name, revision, device, local_files_only):
         from sentence_transformers import SentenceTransformer
     except ImportError:
         raise ImportError("Local embeddings need: uv sync --locked --extra dev --extra amem") from None
-    return SentenceTransformer(name, revision=revision, device=device, local_files_only=local_files_only)
+    with stage("embedding.load", embedding_model=name, device=device, local_files_only=local_files_only):
+        return SentenceTransformer(name, revision=revision, device=device, local_files_only=local_files_only)
 
 
 class LocalEmbedder:
@@ -24,7 +26,8 @@ class LocalEmbedder:
         from agents_memory.usage import record_external_usage
         failed = True
         try:
-            result = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+            with stage("embedding.encode", provider="local", items=len(texts), device=self.settings.device):
+                result = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
             failed = False
             return result
         finally:
@@ -49,8 +52,10 @@ class APIEmbedder:
         for offset in range(0, len(texts), self.settings.embedding_batch_size):
             chunk = texts[offset:offset + self.settings.embedding_batch_size]
             kwargs = {"dimensions": self.settings.embedding_dims} if self.settings.embedding_dims else {}
-            result = self.client.embeddings.create(model=self.settings.embedding_model, input=chunk,
-                                                    encoding_format="float", **kwargs)
+            with stage("embedding.api", embedding_model=self.settings.embedding_model,
+                       batch_start=offset + 1, items=len(chunk), total=len(texts)):
+                result = self.client.embeddings.create(model=self.settings.embedding_model, input=chunk,
+                                                        encoding_format="float", **kwargs)
             ordered = sorted(result.data, key=lambda item: item.index)
             if [item.index for item in ordered] != list(range(len(chunk))):
                 raise ValueError("Embedding service returned missing or duplicate vector indices")

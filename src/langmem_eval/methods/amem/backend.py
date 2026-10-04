@@ -13,6 +13,7 @@ import os
 from uuid import uuid4
 
 import numpy as np
+from agents_memory.diagnostics import event, stage
 
 from ...interfaces import Session
 from ...model_api import validate_base_url
@@ -87,20 +88,27 @@ class AMemBackend:
                 raise ValueError("A-Mem history must contain speaker and text")
             # Preserve the original evaluation harness's turn rendering (including spacing).
             content = "Speaker " + payload["speaker"] + "says : " + payload["text"]
-            self._add_note(content, session.date, session.id, str(payload.get("source_id", f"{session.id}:{index}")))
+            with stage("amem.write.note", message_index=index + 1, message_total=len(session.messages),
+                       session=session.id, notes_before=len(self.notes)):
+                self._add_note(content, session.date, session.id, str(payload.get("source_id", f"{session.id}:{index}")))
+                event("amem.note.saved", notes=len(self.notes), evolutions=self.evolution_count)
 
     def _add_note(self, content, timestamp, session_id, source_id):
-        metadata = self._complete(prompts.ANALYSIS_PROMPT + content, prompts.ANALYSIS_SCHEMA)
+        with stage("amem.analyze", model=self.model):
+            metadata = self._complete(prompts.ANALYSIS_PROMPT + content, prompts.ANALYSIS_SCHEMA)
         note = Note(uuid4().hex, source_id, session_id, timestamp, content, metadata["keywords"],
                     metadata["context"] or "General", metadata["tags"])
-        indices = self._search(content, self.settings.neighbor_k)
+        with stage("amem.neighbors", limit=self.settings.neighbor_k):
+            indices = self._search(content, self.settings.neighbor_k)
         neighbors = "".join(f"memory index:{i}\t talk start time:{self.notes[i].timestamp}"
                             f"\t memory content: {self.notes[i].content}\t memory context: {self.notes[i].context}"
                             f"\t memory keywords: {self.notes[i].keywords}\t memory tags: {self.notes[i].tags}\n"
                             for i in indices)
-        evolution = self._complete(prompts.EVOLUTION_PROMPT.format(context=note.context, content=note.content,
-            keywords=note.keywords, nearest_neighbors_memories=neighbors, neighbor_number=len(indices)),
-            prompts.EVOLUTION_SCHEMA)
+        with stage("amem.evolve", model=self.model, neighbors=len(indices)):
+            evolution = self._complete(prompts.EVOLUTION_PROMPT.format(context=note.context, content=note.content,
+                keywords=note.keywords, nearest_neighbors_memories=neighbors, neighbor_number=len(indices)),
+                prompts.EVOLUTION_SCHEMA)
+        event("amem.evolution.decision", should_evolve=evolution["should_evolve"])
         # Atomic note write: no memory/index changes become visible before all steps succeed.
         updated = deepcopy(self.notes)
         count = self.evolution_count
@@ -125,7 +133,8 @@ class AMemBackend:
             count += 1
         updated.append(note)
         if evolution["should_evolve"] and count % self.settings.evolution_threshold == 0:
-            vectors = self._encode([n.indexed_text(consolidated=True) for n in updated])
+            with stage("amem.index.rebuild", notes=len(updated)):
+                vectors = self._encode([n.indexed_text(consolidated=True) for n in updated])
         else:
             new_vector = self._encode([note.indexed_text()])
             vectors = new_vector if self.vectors is None else np.vstack([self.vectors, new_vector])
@@ -137,7 +146,8 @@ class AMemBackend:
         self.last_retrieval = {"question": query, "query": None, "seed_ids": [], "groups": []}
         if not self.notes:
             return []
-        generated = self._complete(prompts.QUERY_PROMPT.format(question=query), prompts.QUERY_SCHEMA)["keywords"]
+        with stage("amem.query.rewrite", model=self.model):
+            generated = self._complete(prompts.QUERY_PROMPT.format(question=query), prompts.QUERY_SCHEMA)["keywords"]
         if not generated.strip():
             raise ValueError("A-Mem query generator returned empty keywords")
         indices = self._search(generated, limit)
@@ -152,4 +162,6 @@ class AMemBackend:
             groups.append([n.id for n in members])
         self.last_retrieval = {"question": query, "query": generated,
                                "seed_ids": [self.notes[i].id for i in indices], "groups": groups}
+        event("amem.search.done", seeds=len(indices), groups=len(groups),
+              linked_notes=sum(len(group) - 1 for group in groups))
         return records

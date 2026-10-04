@@ -5,6 +5,7 @@ langmem_eval.embeddings; no model is loaded at import time.
 """
 import json
 import os
+from agents_memory.diagnostics import event
 
 from ...model_api import validate_base_url
 from .config import AMemSettings
@@ -49,11 +50,17 @@ class OpenAIController:
             kwargs["response_format"] = {"type": "json_object"}
         if self.settings.extra_body:
             kwargs["extra_body"] = self.settings.extra_body
+        event("llm.request", model=self.model, response_format=mode,
+              max_output_tokens=self.settings.max_output_tokens)
         response = self.client.chat.completions.create(
             model=self.model, messages=[{"role": "system", "content": "You must respond with a JSON object."},
                                         {"role": "user", "content": prompt}],
             temperature=self.settings.temperature, max_tokens=self.settings.max_output_tokens, **kwargs)
         choice = response.choices[0]
+        usage = getattr(response, "usage", None)
+        event("llm.response", model=self.model, finish_reason=choice.finish_reason,
+              prompt_tokens=getattr(usage, "prompt_tokens", None),
+              completion_tokens=getattr(usage, "completion_tokens", None))
         if choice.finish_reason == "length":
             raise ValueError("A-Mem structured response was truncated; increase AMEM_MAX_OUTPUT_TOKENS")
         content = choice.message.content
