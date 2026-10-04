@@ -5,7 +5,7 @@
 
 ## 快速开始
 
-需要 Python >=3.12 和 uv。
+需要 Python 3.12 或 3.13 和 uv。
 
 ```bash
 git clone https://github.com/Seven-Two/LangMemEval.git

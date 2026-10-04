@@ -11,7 +11,7 @@
 
 ## 1. 安装与模型配置
 
-所有命令在仓库根目录运行，Python >=3.12：
+所有命令在仓库根目录运行，Python 3.12 或 3.13：
 
 ```powershell
 uv sync --locked --extra dev --extra amem
@@ -21,6 +21,39 @@ uv run --extra amem langmem-eval --list-methods
 列表应包含 `amem` 和 `langmem`。可选组 `amem` 提供本地 SentenceTransformers，
 不在列出方法时加载模型。首次实际运行可能需要下载模型权重；断网运行需提前缓存权重，
 设置 `EMBEDDING_LOCAL_FILES_ONLY=true`。测试使用替身，不需要模型权重。
+
+### 矩池云：A16 / NVIDIA 510.54 驱动
+
+当前依赖固定为 PyTorch 2.7.1、Sentence Transformers 5.1.2、Transformers 4.57.6。
+Linux x86_64 从官方 `cu118` 索引安装 `torch==2.7.1+cu118`，使用 CUDA 11.8
+运行库；Windows 开发环境使用 CPU 构建。Python 范围限制为 `>=3.12,<3.14`，
+以匹配该 PyTorch 的 wheel。`training` 组也固定 PyTorch 版本，避免一起安装时升级回 CUDA 13。
+
+NVIDIA 510.54 满足 CUDA 11.x 小版本兼容的基础驱动条件，但不代表所有 CUDA 功能
+都支持；矩池云上的实际 GPU 运算和 MiniLM 编码仍需验证。本次依赖调整未进行云端 GPU 实测。
+参考 [NVIDIA 兼容说明](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)。
+
+将更新后的 `pyproject.toml` 和 `uv.lock` 一起同步到服务器，再运行：
+
+```bash
+cd /mnt/LangMemEval
+# /mnt 挂载盘不支持软链接时，将环境放到主目录。
+export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/langmemeval"
+uv sync --locked --python 3.12 --extra dev --extra amem
+```
+
+不要手动编辑锁文件中的版本，也不要只通过 pip 替换 torch；后续同步会按锁文件恢复。
+运行以下命令确认项目环境，而不是当前 Conda 环境中的另一个 torch：
+
+```bash
+uv run --locked --extra amem python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.version.cuda); print('Available:', torch.cuda.is_available()); x = torch.ones((2, 2), device='cuda'); print('GPU:', torch.cuda.get_device_name(0)); print('GPU result:', (x @ x).cpu())"
+```
+
+预期版本分别为 `2.7.1+cu118`、`11.8`，可用性为 `True`，矩阵结果全为 2。
+这只是 GPU 基础检查；之后仍需验证 MiniLM 和 A-Mem。设置 `.env` 中
+`EMBEDDING_DEVICE=cuda`，或者在评测命令中传 `--embedding-device cuda`。
+`nvidia-smi` 仍显示 CUDA 11.6 是正常的，它与 PyTorch 自带运行库版本含义不同。
+本机 CPU 开发环境不代表上述云端检查已经通过。
 
 编辑已有 `.env`；尚无配置文件时从 `.env.example` 复制。不要覆盖已有密钥。
 
