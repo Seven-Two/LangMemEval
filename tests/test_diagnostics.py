@@ -80,7 +80,7 @@ def test_amem_write_retrieve_answer_logged_without_payloads(tmp_path, monkeypatc
          "tags_to_update": [], "new_context_neighborhood": [], "new_tags_neighborhood": []},
         {"keywords": "home"},
     ])
-    controller = NS(complete=lambda *args: next(replies))
+    controller = NS(complete=lambda *args, **kwargs: next(replies))
     embedder = NS(encode=lambda texts: np.array([[1., 0.] for _ in texts]))
     monkeypatch.setattr(registry, "create_backend", lambda *args: AMemBackend(
         "offline", settings=AMemSettings(), controller=controller, embedder=embedder))

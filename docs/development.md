@@ -32,7 +32,10 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 - `src/langmem_eval/adapter.py`：唯一的评测适配器实现。
 - `src/langmem_eval/cli.py`：调用 `agents_memory.runner.main` 的统一入口。
 - `src/agents_memory/runner.py`：实验清单、执行、结果落盘与汇总。
-- `src/agents_memory/systems/langmem.py`：只有导入语句的发现入口。
+- `src/agents_memory/systems/__init__.py`：统一方法注册桥接、原生 baseline 延迟加载。
+- `src/langmem_eval/lifecycle.py`：方法资源释放；异常时保留原始错误。
+
+模块边界、改动位置和离线验收依据见 [架构说明](architecture.md)。
 - `src/agents_memory/paths.py`：统一数据、模型和结果目录。
 
 根目录的单个项目同时打包 langmem_eval 与 agents_memory，通过 uv 可编辑安装。修改上述源码，重新启动评测即可；无需复制。
@@ -70,7 +73,9 @@ src/langmem_eval/
     │   ├── config.py       # AMemSettings、环境变量
     │   ├── memory.py       # Note 数据结构及序列化
     │   ├── prompts.py      # 固定上游提示词、输出 schema
-    │   └── clients.py      # A-Mem 的结构化 LLM 输出接口
+    │   ├── clients.py      # LLM 传输及请求诊断
+    │   ├── responses.py    # 纯 JSON 解析与字段校验策略
+    │   └── evolution.py    # 纯记忆图更新，不调用模型、不写日志
     └── langmem/
         ├── __init__.py
         └── backend.py
@@ -115,9 +120,11 @@ def create(model):
 | --- | --- |
 | `__init__(model)` | 创建当前对话专属状态；模型/API 初始化在这里或延迟执行 |
 | `ingest(session)` | 同步完成历史写入；session.messages 是包含 speaker/text/date/source_id 的 JSON 消息 |
+| `session.turns()` | 遍历 HistoricalTurn，提供 speaker/text/date/source_id；无需在新方法内反复解析 JSON |
 | `retrieve(query, limit)` | 返回按相关性排序、不超过 limit 个完整证据字符串，供共享适配器选择 |
 | `describe()`（可选） | 返回可 JSON 序列化的方法版本、参数等审计信息，排除密钥 |
 | `last_retrieval`（可选） | 保存本次检索的可 JSON 序列化 trace，适配器逐题复制 |
+| `close()`（可选） | 释放方法自己创建的资源；适配器在成功/异常退出时调用，外部注入的资源由调用方管理 |
 
 只需实现接口，无需继承某个 baseline。参考答案不传入方法，失败应抛出异常交给框架记录。
 输出字符串可以是一条记忆或明确声明的一组证据；预算选择会整体保留或舍弃该字符串。
@@ -138,6 +145,40 @@ retrieve(query, limit) 的对象；每个样本都会重新创建对象。
 通过这个注册机制接入的方法共用 adapter 的回答/评分逻辑和上下文预算；方法元数据写入运行结果。
 MemEval 原生 systems 下的其他 baseline 仍使用自身回答逻辑，结果标记为 `adapter_protocol=native`。
 不能仅因为使用同一个 runner 就宣称这些 baseline 采用了相同的回答配置。
+
+### 为新方法增加参数
+
+模板的 `config.py` 负责默认值和校验，`__init__.py` 用 `MethodOption` 声明绑定：
+
+```python
+from langmem_eval.registry import MethodOption, register_method
+
+def public_config():
+    from .config import Settings
+    return Settings.from_env().public_config()
+
+@register_method("my_method", architecture="你的机制", public_config=public_config,
+                 options=(MethodOption("my-method-window", "MY_METHOD_WINDOW", int),))
+def create(model):
+    from .backend import MyMethodBackend
+    return MyMethodBackend(model)
+```
+
+随后可设置 `.env` 的 `MY_METHOD_WINDOW=50`，或传入 `--my-method-window 20`。
+优先级仍是命令行 > `.env` > 进程环境 > 方法默认值；离开实验作用域后恢复进程环境。
+无需修改公共 `configuration.py`、runner 或 pyproject。参数名和环境变量名不能与其他绑定重复。
+`MethodOption` 支持 str/int/float 和 `choices`；布尔开关可声明 choices=("true", "false")，
+再在自己的 Settings 中调用 `langmem_eval.configuration.boolean()`。
+
+`public_config` 必须只读取/校验配置，不创建模型、不联网、不能返回密钥。
+`--show-config` 的 `methods.<方法名>` 与结果 `config.method_settings` 保存该配置，
+即使某段对话写入失败也可核查。A-Mem 原有 `--amem-*` 参数已迁移到同一注册入口；
+`--show-config` 原先单独的 `amem` 字段统一为 `methods.amem`。
+
+构造器接受 `settings=`、模型客户端或 embedding 的注入有利于消融和离线测试；
+默认从环境读取只放在构造边界，算法函数内部不要重新读取环境变量。
+当前 CLI 的环境作用域面向顺序实验，不能在同一进程的多个线程里同时覆盖环境。
+并行对比使用独立进程，各自独立配置、输出目录和后端实例。
 
 ## 实验约定（评测流程）
 
@@ -175,7 +216,9 @@ CLI 优先于 `.env`，`.env` 优先于进程环境变量。模型与算法参�
 存储为进程内存，退出后不保留；尚未实现断点恢复。
 
 输入是 MemEval 的 conversation/session_N 格式；原始 LongMemEval 数据应走其 loader。
-MemEval 的可选依赖缺失会发出警告并跳过对应注册，运行时请显式选择系统。
+原生 baseline 仅在选中时导入；未选中的可选依赖不会影响统一方法的 CLI、评分或运行。
+选中缺少依赖的 baseline 会在模型调用前明确报错，不静默移出比较清单。
+`--systems all` 包含所有已发现的方法，因此需要它们的可选依赖；日常实验建议明确列出方法名。
 运行前生成 `manifest_*.json`：固定题目 ID、原始样本 ID、题目、参考答案哈希及数据哈希。
 不同方法接收同一份数据的独立副本。结果中的 `sample_id` 是清单内唯一 ID，
 原数据标识保存在 `source_sample_id`；原始 `question_id` 保留，用于 LongMemEval 拒答题识别。

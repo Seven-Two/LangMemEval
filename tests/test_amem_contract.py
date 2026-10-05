@@ -1,4 +1,4 @@
-"""Fixed, offline A-Mem acceptance contract established before implementation.
+"""Offline A-Mem acceptance contract, updated for the v4 link-filter policy.
 
 The score measures integration behavior, not benchmark accuracy. Model outputs
 and embeddings are scripted so no credentials, weights or network are needed.
@@ -27,7 +27,7 @@ class Controller:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, prompt, schema):
+    def complete(self, prompt, schema, *, purpose="generic"):
         self.calls.append((prompt, schema))
         value = self.responses.pop(0)
         if isinstance(value, Exception):
@@ -129,9 +129,9 @@ def test_instances_are_isolated_and_empty_search_does_not_call_llm():
     assert second.snapshot()["notes"] == []
 
 
-def test_failed_evolution_or_invalid_links_cannot_commit_partial_note():
+def test_failed_evolution_or_invalid_link_types_cannot_commit_partial_note():
     for bad in [RuntimeError("offline error"), decision(True, actions=["strengthen"],
-                    suggested_connections=[-1], tags_to_update=["bad"])]:
+                    suggested_connections=["not-an-integer"], tags_to_update=["bad"])]:
         obj, _, _ = backend([analysis(), decision(), analysis(), bad])
         obj.ingest(session("Berlin"))
         before = obj.snapshot()

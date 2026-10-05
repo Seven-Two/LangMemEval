@@ -12,10 +12,11 @@ from agents_memory.diagnostics import event, failure, stage
 
 
 def evaluate_questions(conv, answer_fn, run_judge, category_names=None, judge_fn=None):
-    from agents_memory.systems import _helpers as scoring
+    from agents_memory import evaluation as scoring
+    from agents_memory.locomo import CATEGORY_NAMES
     from agents_memory.usage import phase
 
-    cats = category_names or scoring._DEFAULT_CATEGORIES
+    cats = category_names or CATEGORY_NAMES
     sample_id = conv.get("sample_id", "unknown")
     qa_pairs = conv.get("qa", [])
     rows = []

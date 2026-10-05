@@ -2,20 +2,29 @@
 from agents_memory.diagnostics import event, stage
 
 def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn=None):
+    from agents_memory.usage import phase
+    from langmem_eval.lifecycle import managed_backend
+    from langmem_eval.registry import create_backend
+
+    with phase("write"), stage("backend.initialize", method=method, model=llm_model):
+        backend = create_backend(method, llm_model)
+    with managed_backend(backend):
+        return _evaluate_backend(backend, conv, llm_model, run_judge, category_names, judge_fn)
+
+
+def _evaluate_backend(backend, conv, llm_model, run_judge, category_names, judge_fn):
+    from copy import deepcopy
     from openai import OpenAI
     from langmem_eval.evaluation import evaluate_questions
     from agents_memory.usage import phase
     from langmem_eval.benchmark import build_memory, select_context
     from langmem_eval.protocol import AnswerProtocol
-    from langmem_eval.registry import create_backend
     from langmem_eval.model_api import answer_extra_options
     from langmem_eval.llm_diagnostics import DiagnosticHttpClient, chat_completion
 
     protocol = AnswerProtocol.from_env(judge_fn)
     model_options = answer_extra_options()
     with phase("write"):
-        with stage("backend.initialize", method=method, model=llm_model):
-            backend = create_backend(method, llm_model)
         with stage("write"):
             build_memory(conv, backend)
 
@@ -23,7 +32,7 @@ def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn
         answer.trace = {"protocol": protocol.to_dict(), "messages": None,
                        "answer_called": False, "failure_stage": "retrieve"}
         if callable(getattr(backend, "describe", None)):
-            answer.trace["method_config"] = backend.describe()
+            answer.trace["method_config"] = deepcopy(backend.describe())
         with phase("retrieve"), stage("retrieve", top_k=protocol.top_k):
             records = backend.retrieve(question, protocol.top_k)[:protocol.top_k]
             selection = select_context(records, max_tokens=protocol.context_tokens,
@@ -32,7 +41,6 @@ def run_method(method, conv, llm_model, run_judge, category_names=None, judge_fn
                   selected=len(selection.selected_indices), dropped=len(selection.dropped_indices),
                   tokens=selection.token_count, budget=selection.budget)
         if getattr(backend, "last_retrieval", None) is not None:
-            from copy import deepcopy
             answer.trace["retrieval_trace"] = deepcopy(backend.last_retrieval)
         answer.trace.update(selection.to_dict())
         if not selection.context and protocol.empty_context == "abstain":

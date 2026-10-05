@@ -99,16 +99,18 @@ def _run(args, sources):
         raise ValueError("Shared --embedding-* options apply to registered methods only; "
                          "configure native baseline embeddings in their own adapters")
     model_config = public_model_config(llm_model) if any(s in registered for s in system_names) else None
-    amem_config = None
-    if "amem" in system_names:
-        from langmem_eval.methods.amem.config import AMemSettings
-        amem_config = AMemSettings.from_env().public_config()
+    method_configs = {name: registered[name].public_config() if registered[name].public_config else {}
+                      for name in system_names if name in registered}
+    json.dumps(method_configs, allow_nan=False)  # provenance must be serializable before paid calls
+    # Resolve selected native dependencies before any paid model calls.
+    for name in system_names:
+        SYSTEMS[name]["fn"]
     if args.show_config:
         print(json.dumps({"systems": system_names, "benchmark": args.benchmark,
                           "num_samples": args.num_samples, "skip_judge": args.skip_judge,
                           "logging": {"console": args.log_mode, "file": "full"},
                           "models": model_config, "answer_protocol": protocol.to_dict(),
-                          "amem": amem_config, "sources": sources,
+                          "methods": method_configs, "sources": sources,
                           "embedding_scope": "registered methods; native adapters retain their own configuration"},
                          ensure_ascii=False, indent=2))
         return
@@ -170,6 +172,7 @@ def _run(args, sources):
             "adapter_protocol": "unified_v1" if unified else "native",
             "answer_protocol": protocol.to_dict() if unified else None,
             "models": model_config if unified else None,
+            "method_settings": method_configs.get(name),
             "configuration_sources": sources,
             "runtime_log": f"run_{run_tag}.log",
             "console_log_mode": args.log_mode, "file_log_mode": "full",

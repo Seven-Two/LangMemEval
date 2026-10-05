@@ -1,12 +1,13 @@
 """Optional real LangMem backend; dependencies are loaded only on construction."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from uuid import uuid4
 
 from ...interfaces import Session
 from ...configuration import EmbeddingSettings
-from ...embeddings import create_embedder
+from ...embeddings import create_embedder, validate_vectors
 from ...model_api import llm_extra_body
 
 
@@ -20,30 +21,39 @@ class LangMemBackend:
         self.embedding_settings = embedding_settings or EmbeddingSettings.from_env()
         if self.embedding_settings.embedding_provider == "openai" and self.embedding_settings.embedding_dims is None:
             raise ValueError("LangMem's vector store requires --embedding-dims / EMBEDDING_DIMS for API embeddings")
-        self.embedder = embedder if embedder is not None else create_embedder(self.embedding_settings)
-        dims = self.embedding_settings.embedding_dims
-        if dims is None:
-            dims = self.embedder.model.get_sentence_embedding_dimension()
-        if not dims or dims < 1:
-            raise ValueError("Cannot determine LangMem embedding dimensions; set EMBEDDING_DIMS")
-        self.embedding_dims = dims
-        self.namespace = ("langmem-eval", uuid4().hex)
-        self.store = InMemoryStore(index={
-            "dims": dims,
-            "embed": self._embed,
-        })
-        options = {} if instructions is None else {"instructions": instructions}
-        self.manager = create_memory_store_manager(
-            ChatOpenAI(model=model, temperature=0.1, extra_body=llm_extra_body() or None),
-            namespace=self.namespace, store=self.store,
-            enable_deletes=enable_deletes, query_limit=query_limit, **options,
-        )
+        with ExitStack() as resources:
+            self.embedder = embedder if embedder is not None else create_embedder(self.embedding_settings)
+            close = getattr(self.embedder, "close", None)
+            if embedder is None and callable(close):
+                resources.callback(close)
+            dims = self.embedding_settings.embedding_dims
+            if dims is None:
+                dims = self.embedder.dimensions
+            if not dims or dims < 1:
+                raise ValueError("Cannot determine LangMem embedding dimensions; set EMBEDDING_DIMS")
+            self.embedding_dims = dims
+            self.namespace = ("langmem-eval", uuid4().hex)
+            self.store = InMemoryStore(index={
+                "dims": dims,
+                "embed": self._embed,
+            })
+            options = {} if instructions is None else {"instructions": instructions}
+            chat = ChatOpenAI(model=model, temperature=0.1, extra_body=llm_extra_body() or None)
+            client_close = getattr(getattr(chat, "root_client", None), "close", None)
+            if callable(client_close):
+                resources.callback(client_close)
+            self.manager = create_memory_store_manager(
+                chat,
+                namespace=self.namespace, store=self.store,
+                enable_deletes=enable_deletes, query_limit=query_limit, **options,
+            )
+            self._resources = resources.pop_all()
 
     def _embed(self, texts):
-        vectors = self.embedder.encode(texts)
-        if len(vectors) != len(texts) or any(len(vector) != self.embedding_dims for vector in vectors):
-            raise ValueError("Embedding dimensions do not match LangMem's vector store")
-        return vectors.tolist() if hasattr(vectors, "tolist") else vectors
+        return validate_vectors(self.embedder.encode(texts), rows=len(texts), dims=self.embedding_dims).tolist()
+
+    def close(self):
+        self._resources.close()
 
     def describe(self):
         return {"implementation": "langmem_shared_embedding_v1",

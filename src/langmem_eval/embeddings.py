@@ -6,6 +6,20 @@ from agents_memory.diagnostics import stage
 from .configuration import EmbeddingSettings
 
 
+def validate_vectors(vectors, *, rows: int, dims: int | None = None):
+    """Shared cosine-index boundary; return a finite, nonzero 2-D float array."""
+    vectors = np.asarray(vectors, dtype=float)
+    if vectors.ndim != 2 or vectors.shape[0] != rows or vectors.shape[1] == 0:
+        raise ValueError("Invalid embedding shape")
+    if not np.isfinite(vectors).all():
+        raise ValueError("Embeddings must be finite")
+    if dims is not None and vectors.shape[1] != dims:
+        raise ValueError("Embedding dimension changed or mismatches configuration")
+    if np.any(np.linalg.norm(vectors, axis=1) == 0):
+        raise ValueError("Embeddings must be nonzero")
+    return vectors
+
+
 @lru_cache(maxsize=2)
 def _load_local_model(name, revision, device, local_files_only):
     try:
@@ -20,7 +34,11 @@ class LocalEmbedder:
     def __init__(self, settings):
         self.settings = settings
         self.model = _load_local_model(settings.embedding_model, settings.embedding_revision,
-                                       settings.device, settings.local_files_only)
+                                      settings.device, settings.local_files_only)
+
+    @property
+    def dimensions(self):
+        return self.model.get_sentence_embedding_dimension()
 
     def encode(self, texts):
         from agents_memory.usage import record_external_usage
@@ -39,11 +57,20 @@ class APIEmbedder:
     def __init__(self, settings: EmbeddingSettings, *, client=None):
         from openai import OpenAI
         self.settings = settings
+        self._owns_client = client is None
         if client is None:
             if not settings.embedding_base_url or not settings.embedding_api_key:
                 raise ValueError("Set EMBEDDING_BASE_URL and EMBEDDING_API_KEY for API embeddings")
             client = OpenAI(api_key=settings.embedding_api_key, base_url=settings.embedding_base_url)
         self.client = client
+
+    @property
+    def dimensions(self):
+        return self.settings.embedding_dims
+
+    def close(self):
+        if self._owns_client:
+            self.client.close()
 
     def encode(self, texts):
         if not texts:

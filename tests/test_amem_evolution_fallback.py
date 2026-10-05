@@ -8,7 +8,8 @@ import pytest
 from agents_memory import diagnostics as log
 from langmem_eval.methods.amem import prompts
 from langmem_eval.methods.amem.backend import AMemBackend
-from langmem_eval.methods.amem.clients import InvalidJSONResponse, OpenAIController
+from langmem_eval.methods.amem.clients import OpenAIController
+from langmem_eval.methods.amem.responses import InvalidJSONResponse
 from langmem_eval.methods.amem.config import AMemSettings
 from test_amem_contract import Encoder, analysis, decision, session
 
@@ -95,8 +96,8 @@ def test_length_with_complete_json_applies_evolution_and_rebuilds(tmp_path):
 
 @pytest.mark.parametrize("bad", [RuntimeError("transport failure"), {"should_evolve": "yes"},
     ('{"should_evolve": true}', "length"),
-    decision(True, actions=["strengthen"], suggested_connections=[99]),
-    decision(True, actions=["unknown"]), (None, "stop")])
+    decision(True, actions=["strengthen"], suggested_connections=[True]),
+    decision(True, actions=[123]), (None, "stop")])
 def test_other_evolution_errors_remain_fatal_and_atomic(bad):
     obj, _ = scripted_backend([analysis(), decision(), analysis(), bad])
     obj.ingest(session("Berlin"))
@@ -127,21 +128,23 @@ def test_embedding_error_after_fallback_does_not_commit_memory():
 
 
 @pytest.mark.parametrize("schema", [prompts.ANALYSIS_SCHEMA, prompts.QUERY_SCHEMA])
-def test_analysis_and_query_still_fail_on_invalid_or_truncated_json(schema):
-    obj, calls = scripted_backend([("broken", "stop"), ("{}", "length")])
+def test_analysis_and_query_still_fail_on_invalid_or_incomplete_json(schema):
+    obj, calls = scripted_backend([("broken", "stop"), ('{"keywords":', "length")])
     with pytest.raises(InvalidJSONResponse):
         obj.controller.complete("test", schema)
-    with pytest.raises(ValueError, match="truncated"):
+    with pytest.raises(InvalidJSONResponse):
         obj.controller.complete("test", schema)
     assert len(calls) == 2
 
 
-def test_fallback_counts_reach_answer_results(monkeypatch):
+def test_fallback_and_link_filter_counts_reach_answer_results(monkeypatch):
     import openai
     from langmem_eval import registry
     from langmem_eval.adapter import run_method
 
-    obj, _ = scripted_backend([analysis(), ("broken", "length"), {"keywords": "Berlin"}])
+    obj, _ = scripted_backend([analysis(), ("broken", "length"), analysis(),
+        decision(True, actions=["strengthen"], suggested_connections=[0, 99]),
+        {"keywords": "Berlin"}])
     monkeypatch.setattr(registry, "create_backend", lambda *args: obj)
     monkeypatch.setenv("LLM_EXTRA_BODY", "{}")
 
@@ -154,10 +157,12 @@ def test_fallback_counts_reach_answer_results(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", AnswerClient)
     conv = {"conversation": {"session_1_date_time": "2025-01-01", "session_1": [
-        {"speaker": "Alice", "text": "Berlin"}]}, "qa": [
+        {"speaker": "Alice", "text": "Berlin"}, {"speaker": "Alice", "text": "Still Berlin"}]}, "qa": [
         {"question": "Where?", "answer": "Berlin", "category": 1}]}
     row = run_method("amem", conv, "offline", False)[0]
     assert row["answer_status"] == "ok"
     config = row["answer_trace"]["method_config"]
-    assert config["implementation"] == "amem_original_json_unified_v3"
-    assert config["evolution_stats"] == {"attempts": 1, "truncated": 1, "skipped_invalid_json": 1}
+    assert config["implementation"] == "amem_original_json_unified_v4"
+    assert config["evolution_stats"] == {"attempts": 2, "truncated": 1, "skipped_invalid_json": 1}
+    assert config["link_policy"] == "filter_non_candidates"
+    assert config["output_adjustments"]["filtered_links"] == 1

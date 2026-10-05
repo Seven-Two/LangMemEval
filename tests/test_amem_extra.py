@@ -1,4 +1,4 @@
-"""Edge cases beyond the immutable A-Mem acceptance metric; never use real APIs."""
+"""Edge cases beyond the A-Mem acceptance metric; never use real APIs."""
 import json
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -46,7 +46,7 @@ def test_configuration_redacts_private_options():
 
 
 @pytest.mark.parametrize("mode", ["json_schema", "json_object", "prompt"])
-def test_chat_modes_validate_output_and_reject_truncation(mode):
+def test_chat_modes_validate_output_even_when_marked_length(mode):
     sent = []
     choice = NS(message=NS(content='```json\n{"keywords":"Berlin"}\n```'), finish_reason="stop")
     def create(**kwargs):
@@ -61,8 +61,7 @@ def test_chat_modes_validate_output_and_reject_truncation(mode):
     else:
         assert sent[0]["response_format"]["type"] == mode
     choice.finish_reason = "length"
-    with pytest.raises(ValueError, match="truncated"):
-        ctrl.complete("Produce JSON", schema)
+    assert ctrl.complete("Produce JSON", schema) == {"keywords": "Berlin"}
     choice.finish_reason = "stop"
     choice.message.content = '{"keywords":[]}'
     with pytest.raises(ValueError):
@@ -125,7 +124,7 @@ def test_distribution_contains_amem_and_license():
 
 def test_sync_evaluation_failure_trace_and_judge_accounting(monkeypatch):
     from langmem_eval.evaluation import evaluate_questions
-    from agents_memory.systems import _helpers as scoring
+    from agents_memory import evaluation as scoring
     from agents_memory.usage import reset, get_report, record_external_usage
     conv = {"sample_id": "test", "qa": [
         {"question": "fail", "answer": "", "category": 1},

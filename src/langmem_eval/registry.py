@@ -10,17 +10,43 @@ from .interfaces import MemoryBackend
 
 
 @dataclass(frozen=True)
+class MethodOption:
+    """Method-owned CLI/.env binding; defaults live in the method settings."""
+
+    flag: str
+    env: str
+    value_type: type = str
+    choices: tuple | None = None
+    help: str = ""
+
+    def __post_init__(self):
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", self.flag):
+            raise ValueError(f"Invalid method option flag: {self.flag!r}")
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", self.env):
+            raise ValueError(f"Invalid method environment key: {self.env!r}")
+        if self.value_type not in (str, int, float):
+            raise ValueError("Method options support str, int or float converters")
+
+    @property
+    def dest(self):
+        return self.flag.replace("-", "_")
+
+
+@dataclass(frozen=True)
 class Method:
     factory: Callable[[str], MemoryBackend]
     architecture: str
     infrastructure: str
     aml_factory: Callable | None = None
+    options: tuple[MethodOption, ...] = ()
+    public_config: Callable[[], dict] | None = None
 
 
 METHODS: dict[str, Method] = {}
 
 
-def register_method(name: str, *, architecture: str, infrastructure: str = "custom", aml_factory=None):
+def register_method(name: str, *, architecture: str, infrastructure: str = "custom", aml_factory=None,
+                    options: tuple[MethodOption, ...] = (), public_config=None):
     """Decorate a factory/class accepting the benchmark model as one argument."""
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or name == "all":
         raise ValueError(f"Invalid method name: {name!r}")
@@ -30,7 +56,11 @@ def register_method(name: str, *, architecture: str, infrastructure: str = "cust
             raise ValueError(f"Method already registered: {name}")
         if not callable(factory):
             raise TypeError("Method factory must be callable")
-        METHODS[name] = Method(factory, architecture, infrastructure, aml_factory)
+        if not all(isinstance(option, MethodOption) for option in options):
+            raise TypeError("Method options must be MethodOption instances")
+        if public_config is not None and not callable(public_config):
+            raise TypeError("public_config must be a callable without model initialization")
+        METHODS[name] = Method(factory, architecture, infrastructure, aml_factory, tuple(options), public_config)
         return factory
     return register
 

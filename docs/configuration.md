@@ -161,3 +161,11 @@ with stage("my_method.retrieve", top_k=10):
 ```
 
 不要把密钥、完整配置字典、提示词或记忆正文传给日志字段。
+
+## 新方法参数
+
+每个方法可在自己的注册入口声明 `MethodOption`，自动接入 CLI > `.env` > 进程环境 > 默认值。
+无需修改公共配置映射。模板示例为 `--my-method-window` / `MY_METHOD_WINDOW`。
+方法提供的无模型配置回调写入 `--show-config` 的 `methods.<name>` 和结果的
+`config.method_settings`；A-Mem 现在使用 `methods.amem`，原有 `--amem-*` 参数保持不变。
+具体示例见 [开发指南](development.md#为新方法增加参数)。

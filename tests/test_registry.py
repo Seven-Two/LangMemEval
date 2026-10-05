@@ -34,10 +34,8 @@ class Backend:
         return ["Berlin"][:limit]
 ''', encoding="utf-8")
     monkeypatch.setattr(package, "__path__", [*package.__path__, str(tmp_path)])
-    bridge = importlib.import_module("agents_memory.systems.langmem")
     try:
         importlib.invalidate_caches()
-        importlib.reload(bridge)
         importlib.reload(systems)
         assert "test_demo" in systems.SYSTEMS
         assert systems.SYSTEMS["test_demo"]["architecture"] == "offline test"
@@ -51,5 +49,4 @@ class Backend:
         METHODS.pop("test_demo", None)
         sys.modules.pop("langmem_eval.methods.demo", None)
         monkeypatch.undo()
-        importlib.reload(bridge)
         importlib.reload(systems)

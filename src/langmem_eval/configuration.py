@@ -87,10 +87,19 @@ ENV_FLAGS = {
     "data_file": "EVAL_DATA_FILE", "output_dir": "EVAL_RESULTS_DIR",
     "log_mode": "EVAL_LOG_MODE",
     "judge_model": "JUDGE_MODEL", "longmemeval_judge_model": "LONGMEMEVAL_JUDGE_MODEL",
-    "amem_response_format": "AMEM_RESPONSE_FORMAT", "amem_neighbor_k": "AMEM_NEIGHBOR_K",
-    "amem_evolution_threshold": "AMEM_EVOLUTION_THRESHOLD", "amem_temperature": "AMEM_TEMPERATURE",
-    "amem_max_output_tokens": "AMEM_MAX_OUTPUT_TOKENS",
 }
+
+
+def environment_flags():
+    """Resolve registered method bindings without central method-name branches."""
+    from .registry import discover_methods
+    flags = dict(ENV_FLAGS)
+    for name, spec in discover_methods().items():
+        for option in spec.options:
+            if option.dest in flags or option.env in flags.values():
+                raise ValueError(f"Configuration binding collision in method {name}: {option.flag}")
+            flags[option.dest] = option.env
+    return flags
 
 
 def add_model_arguments(parser):
@@ -108,12 +117,14 @@ def add_model_arguments(parser):
     group.add_argument("--embedding-dims", help="Positive integer; auto omits the API dimensions parameter")
     group.add_argument("--embedding-batch-size", type=int)
     group.add_argument("--embedding-local-files-only", action=argparse.BooleanOptionalAction, default=None)
-    group = parser.add_argument_group("A-Mem algorithm parameters")
-    group.add_argument("--amem-response-format", choices=("json_schema", "json_object", "prompt"))
-    group.add_argument("--amem-neighbor-k", type=int)
-    group.add_argument("--amem-evolution-threshold", type=int)
-    group.add_argument("--amem-temperature", type=float)
-    group.add_argument("--amem-max-output-tokens", type=int)
+    from .registry import discover_methods
+    environment_flags()  # fail early on ambiguous CLI/environment ownership
+    for name, spec in sorted(discover_methods().items()):
+        if spec.options:
+            group = parser.add_argument_group(f"{name} method parameters")
+            for option in spec.options:
+                group.add_argument("--" + option.flag, type=option.value_type,
+                                   choices=option.choices, help=option.help, default=None)
 
 
 @contextmanager
@@ -125,11 +136,12 @@ def configured_environment(args):
     disabled = os.getenv("PYTHON_DOTENV_DISABLED", "").lower() in {"1", "true", "yes", "t", "y"}
     # No interpolation: avoid unexpected cross-source substitution of credentials.
     file_values = dotenv_values(path, interpolate=False) if path.is_file() and not disabled else {}
-    keys = set(ENV_FLAGS.values()) | {"EVAL_DATA_DIR", "EVAL_MODELS_DIR"}
+    flags = environment_flags()
+    keys = set(flags.values()) | {"EVAL_DATA_DIR", "EVAL_MODELS_DIR"}
     values = {key: os.environ[key] for key in keys if key in os.environ}
     values.update({key: value for key, value in file_values.items() if key in keys and value is not None})
     sources = {key: ".env" if key in file_values else "environment" for key in values}
-    for attr, key in ENV_FLAGS.items():
+    for attr, key in flags.items():
         value = getattr(args, attr, None)
         if value is not None:
             values[key] = str(value).lower() if isinstance(value, bool) else str(value)

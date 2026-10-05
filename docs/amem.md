@@ -148,9 +148,9 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 | 检索预算 | `--top-k` 是种子数，每个种子最多附带 k 个关联笔记；最终受 `--context-tokens` 约束 |
 | 证据选择 | 整组放入或舍弃，不字符截断；大组可能被跳过；不同组内重复笔记保留 |
 | 链接计数 | 修复上游关联展开中可能返回 k+1 条的边界问题，最多 k 条 |
-| 链接身份 | 将合法的邻居索引映射为稳定笔记 UUID，拒绝越界及非候选邻居 |
+| 链接身份 | 仅将候选邻居索引映射为稳定笔记 UUID；过滤非候选编号并记录，不因此中断写入；这是区别于上游直接保存所有编号的健壮性策略 |
 | 邻居更新长度 | 与固定上游一致：按候选邻居顺序更新 `min(邻居数, 返回标签条数)` 条；忽略多余条目，缺少 context 时保留旧值；长度不匹配写入日志 |
-| 失败处理 | 演化 JSON 解码失败时跳过本次演化，保留分析后的新笔记；演化截断响应先尝试解析；分析/查询的截断或非法 JSON、非法字段结构/链接/向量及网络错误仍显式失败；单条笔记原子提交 |
+| 失败处理 | 演化 JSON 解码失败时跳过本次演化，保留分析后的新笔记；所有截断响应先尝试解析；分析/查询非法 JSON、实际使用字段的缺失/类型错误、非法向量及网络错误仍显式失败；单条笔记原子提交 |
 | 索引重建 | 重用相同 embedding 实例、批量重编码，省略重建前会被丢弃的新笔记单独编码；不重载模型 |
 | 模型接口 | OpenAI 兼容聊天；可选远程 embedding；并非移植上游所有 Ollama/sglang 控制器 |
 | 持久化和赛事 | 每段对话使用独立内存状态；未接入 AML 的持久化 Add/Search 服务，也未实现断点恢复 |
@@ -178,20 +178,20 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 原适配版本会对过长数组抛出 `ValueError`，比上游更严格。
 本次修复将实现标识更新为 `amem_original_json_unified_v2`，结果的 `method_config`
 增加 `neighbor_update_policy=upstream_positional_prefix`，便于区分修复前后的实验。
-单条笔记的原子写入、非法链接校验及其他显式失败策略仍保留；这仅对齐邻居长度处理，
-不表示整个框架与上游评测协议完全一致。
+v2 保留了单条笔记的原子写入和非法链接报错；v4 将非候选链接改为过滤，详见下文。
+这些适配不表示整个框架与上游评测协议完全一致。
 
 ### 演化输出截断与 JSON 解析失败
 
-当前实现标识为 `amem_original_json_unified_v3`。默认 `AMEM_MAX_OUTPUT_TOKENS=1000`
+v3 引入演化解析失败回退，当前实现标识为 `amem_original_json_unified_v4`。默认 `AMEM_MAX_OUTPUT_TOKENS=1000`
 沿用固定上游 OpenAI 控制器的单次输出上限，并不表示 1000 对所有模型都是最佳预算。
 处理流程对齐上游 `process_memory` 的 JSON 解码失败策略：
 
-- 演化响应 `finish_reason=length` 时记录截断，但仍尝试解析；完整且通过结构校验的 JSON 可以正常应用。
+- 响应 `finish_reason=length` 时记录截断，但仍尝试解析；完整且通过实际使用字段校验的 JSON 可以正常应用。v4 将此规则扩展到分析和查询改写。
 - 按上游方式提取第一个 `{` 到最后一个 `}` 之间的内容，不补全或猜测被截断的 JSON。
 - 仅 JSON 解码失败时跳过这次演化：不改旧邻居、不增加成功演化计数，使用已完成分析的新笔记进行向量编码并保存；后续消息和问答继续。
 - 不增加纠正请求，不自动提高预算；SDK 原有网络重试策略不变。
-- 字段缺失/类型错误、非法链接、网络与 embedding 错误仍显式报错；分析和查询改写的截断处理不变。若跳过演化后新笔记编码失败，仍不提交该笔记。
+- 实际使用字段缺失/类型错误、网络与 embedding 错误仍显式报错；分析和查询改写不回退无效 JSON。若跳过演化后新笔记编码失败，仍不提交该笔记。
 
 日志新增 `amem.response.truncated`、`amem.evolution.skipped` 和 `amem.evolution.stats`。
 截断和跳过事件携带原调用的 `request_id`、`response_id`、`finish_reason`，以及会话/消息位置；
@@ -220,8 +220,57 @@ JSON 无效的响应；两者不一定相等。统计记录发生过的尝试，
 矩池云端可执行新增离线回归（无真实模型请求）：
 
 ```bash
-PYTHON_DOTENV_DISABLED=1 uv run --locked --extra dev python -m pytest -q tests/test_amem_evolution_fallback.py tests/test_amem_contract.py tests/test_amem_extra.py tests/test_amem_neighbor_updates.py tests/test_llm_diagnostics.py
+PYTHON_DOTENV_DISABLED=1 uv run --locked --extra dev python -m pytest -q tests/test_amem_output_validation.py tests/test_amem_evolution_fallback.py tests/test_amem_contract.py tests/test_amem_extra.py tests/test_amem_neighbor_updates.py tests/test_llm_diagnostics.py
 ```
+
+### v4：过滤非候选链接与校验审查
+
+模型返回 `suggested_connections` 中的整数如果不在当前候选邻居中，会被过滤。即使该编号
+对应某条已存在的记忆，也不会关联；负数、越界编号同样过滤。合法编号的顺序和重复项保留，
+不会将编号猜测为候选列表的相对位置。全部被过滤时，新笔记仍保存，合法标签更新和邻居更新仍执行。
+没有候选时不会建立链接。此规则不增加模型请求，默认输出预算仍为 1000。
+
+固定上游 `memory_layer.py:833–835` 直接保存返回编号，`893–894` 检索时直接用作下标。
+因此 `link_policy=filter_non_candidates` 是本适配器的健壮性改进，不是与上游完全相同的行为。
+
+日志 `amem.links.filtered` 记录 `candidate_indices`、`returned_indices`、`kept_indices`、
+`filtered_indices` 及原请求 ID；数字使用当前会话记忆列表的全局索引，不记录记忆正文。
+`answer_trace.method_config` 增加 `link_policy`、`unknown_action_policy`、
+`response_validation_policy` 和 `output_adjustments`：
+
+```json
+{
+  "filtered_link_responses": 1,
+  "filtered_links": 3,
+  "ignored_action_responses": 0,
+  "ignored_actions": 0
+}
+```
+
+数字为示例；这些是按 conversation 累计的响应/条目数，重复非法编号按出现次数统计，
+即使后续编码失败也保留已观察到的计数。每题复制同一份累计值，汇总时不能逐题相加。
+写入阶段失败时可从事件日志查看，未进入问答的结果不含方法 trace。
+
+本次审查覆盖 A-Mem 模型边界、写入/检索、参数检查及共用 embedding 返回值检查：
+
+| 检查 | v4 处理及依据 |
+| --- | --- |
+| 非候选链接 | 过滤并继续；不接受负数下标，不猜测模型意图 |
+| 未知演化动作 | 忽略未知动作，照常执行 `strengthen` / `update_neighbor`；上游仅处理这两个分支，不为其他动作报错；`amem.actions.ignored` 记录数量 |
+| 额外 JSON 字段 | 忽略算法不使用的顶层字段，`amem.response.extra_fields_ignored` 仅记录数量；不记录额外字段名/内容 |
+| 未执行动作的字段 | `should_evolve=false` 时只要求该布尔值；为 true 时要求动作数组及所选已知动作需要的字段。未用字段缺失或类型错误不阻断，和上游按分支读取字段的方式一致 |
+| 标记截断但 JSON 完整 | 分析、演化、查询均先解析及校验，不仅凭 `length` 报错；不补全不完整 JSON |
+| 邻居更新数组长度不一致 | 保留 v2 的上游位置前缀规则 |
+| 实际使用字段缺失/类型错误 | 保留错误，包括字符串形式的编号、布尔值充当编号；不强制转换；错误消息包含字段路径便于定位 |
+| 分析无效 JSON、查询无效 JSON 或空关键词 | 保留错误，不捏造元数据或静默改用原问题；演化 JSON 解码失败沿用 v3 回退 |
+| 向量形状、维度、非有限值、零向量及返回索引 | 保留，避免余弦检索出错或数据错配 |
+| 非法输入消息、非正预算/检索数量、错误端点及网络故障 | 保留，不能通过忽略错误构造可信的评测结果 |
+
+严格 JSON 请求中的原始提示词和 Schema 保持不变；以上是返回后的本地处理策略，
+不保证服务商一定遵守请求 Schema。`should_evolve=true` 仍按上游增加演化计数，
+即便所有链接被过滤或动作全部未知；该计数不是“实际改变了多少条记忆”。
+无需新增配置。离线回归已随新策略更新：原先“非法整数链接必须报错”的验收断言
+改为“错误类型链接必须报错”，另有专门测试覆盖非法整数过滤、继续检索和结果统计。
 
 ## 4. 查看结果与继续开发
 
@@ -316,21 +365,29 @@ uv run --locked --extra dev python -m pytest -q tests/test_llm_diagnostics.py te
 
 代码位置：
 
-- `src/langmem_eval/methods/amem/backend.py`：写入演化与检索算法。
+- `src/langmem_eval/methods/amem/backend.py`：会话状态、写入/检索编排和原子提交。
+- `src/langmem_eval/methods/amem/evolution.py`：纯笔记/链接更新；返回候选状态、诊断与统计，不调用模型。
+- `src/langmem_eval/methods/amem/responses.py`：纯解析和运行时校验；显式区分 analysis/evolution/query，避免根据 Schema 内容猜测阶段。
 - `src/langmem_eval/configuration.py`：命令行、dotenv 的统一解析和共享 embedding 设置。
 - `src/langmem_eval/embeddings.py`：A-Mem 与 LangMem 共用的本地/API embedding 客户端。
 - `src/langmem_eval/methods/amem/config.py`：A-Mem 算法设置和公开配置记录。
 - `src/langmem_eval/methods/amem/memory.py`：笔记结构与序列化。
-- `src/langmem_eval/methods/amem/clients.py`：A-Mem 结构化 LLM 输出边界。
+- `src/langmem_eval/methods/amem/clients.py`：LLM 请求、响应解析入口及诊断；模型客户端可注入。
 - `src/langmem_eval/llm_diagnostics.py`：聊天响应长度、完整用量和逐次 HTTP 重试诊断。
 - `src/langmem_eval/methods/amem/prompts.py`：固定上游提示词和 schema。
-- `src/langmem_eval/methods/amem/__init__.py`：方法注册入口。
+- `src/langmem_eval/methods/amem/__init__.py`：方法、参数和公开配置回调注册入口。
 - `src/langmem_eval/adapter.py`：统一回答和 trace。
 - `src/langmem_eval/evaluation.py`：同步逐题评分，沿用框架评分函数与结果字段；无需异步事件循环。
 
 `AMemBackend.snapshot()` 可用于 Python 调试笔记内容；目前不自动将完整笔记库写入结果文件，
 检索上下文和实际回答请求会保存。进一步实现新方法时，保留 `amem` baseline，
 在 `methods/` 注册另一个名称，接入你自己的 backend，详见 [开发指南](development.md)。
+
+注入 A-Mem controller 时，实现 `complete(prompt, schema, *, purpose="generic") -> dict`；
+purpose 为 analysis/evolution/query。输出策略在 `responses.py` 中明确选择，不通过字典相等判断阶段。
+注入 embedder 时实现 `encode(texts)`，返回二维向量；共享验证在 `langmem_eval.embeddings.validate_vectors`。
+后端只关闭自己创建的资源；注入资源由测试或上层调用方关闭。
+这次职责拆分不修改 v4 的提示词、图更新语义、默认预算或模型调用次数。
 
 ## 5. 离线验证
 
@@ -340,7 +397,7 @@ uv sync --locked --extra dev
 .venv/Scripts/python.exe scripts/verify_amem.py --guard
 ```
 
-第一个命令对应固定的 10 项行为验收，指标 `amem_contract_pass_rate` 满分为 1；
+第一个命令对应当前版本的 10 项行为验收（v4 已按新链接策略修订），指标 `amem_contract_pass_rate` 满分为 1；
 第二个命令检查现有回归及新增边界测试。脚本禁用 `.env` 加载并注入本地替身，
 不使用真实密钥、不下载模型、不调用付费服务。
 它们验证工程行为，不评价真实模型的记忆准确率；仍需实际数据集实验才能得出论文结论。

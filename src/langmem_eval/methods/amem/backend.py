@@ -5,10 +5,9 @@ are documented in docs/amem.md; model transport and prompts are separate modules
 """
 from __future__ import annotations
 
-from copy import deepcopy
+from contextlib import ExitStack
 from dataclasses import asdict
 import hashlib
-import json
 import os
 from uuid import uuid4
 
@@ -18,13 +17,15 @@ from agents_memory.diagnostics import event, stage
 from ...interfaces import Session
 from ...model_api import validate_base_url
 from . import prompts
-from ...embeddings import APIEmbedder, LocalEmbedder
-from .clients import InvalidJSONResponse, OpenAIController, _validate
+from ...embeddings import create_embedder, validate_vectors
+from .clients import OpenAIController
+from .responses import InvalidJSONResponse, prepare_response
+from .evolution import apply_evolution
 from .config import AMemSettings
 from .memory import Note
 
 UPSTREAM_COMMIT = "0c8039f28fdcc08189a23c07a3437d9d2482f9c2"
-IMPLEMENTATION = "amem_original_json_unified_v3"
+IMPLEMENTATION = "amem_original_json_unified_v4"
 PROMPT_SHA256 = hashlib.sha256((prompts.ANALYSIS_PROMPT + prompts.EVOLUTION_PROMPT
                                + prompts.QUERY_PROMPT).encode()).hexdigest()
 
@@ -33,14 +34,22 @@ class AMemBackend:
         self.settings = settings if settings is not None else AMemSettings.from_env()
         # Validate configuration before loading weights or making requests.
         validate_base_url(os.getenv("OPENAI_BASE_URL"))
-        self.controller = controller if controller is not None else OpenAIController(model, self.settings)
-        self.embedder = embedder if embedder is not None else (
-            LocalEmbedder(self.settings) if self.settings.embedding_provider == "local" else APIEmbedder(self.settings))
+        with ExitStack() as resources:
+            self.controller = controller if controller is not None else OpenAIController(model, self.settings)
+            if controller is None:
+                resources.callback(self.controller.close)
+            self.embedder = embedder if embedder is not None else create_embedder(self.settings)
+            close = getattr(self.embedder, "close", None)
+            if embedder is None and callable(close):
+                resources.callback(close)
+            self._resources = resources.pop_all()
         self.model = model
         self.notes: list[Note] = []
         self.vectors = None
         self.evolution_count = 0
         self.evolution_stats = {"attempts": 0, "truncated": 0, "skipped_invalid_json": 0}
+        self.output_adjustments = {"filtered_link_responses": 0, "filtered_links": 0,
+                                   "ignored_action_responses": 0, "ignored_actions": 0}
         self.last_retrieval = None
 
     def describe(self):
@@ -50,29 +59,30 @@ class AMemBackend:
                 "neighbor_update_policy": "upstream_positional_prefix",
                 "evolution_failure_policy": "upstream_skip_invalid_json",
                 "evolution_stats": dict(self.evolution_stats),
+                "link_policy": "filter_non_candidates",
+                "unknown_action_policy": "upstream_ignore",
+                "response_validation_policy": "active_fields_ignore_extras_parse_length",
+                "output_adjustments": dict(self.output_adjustments),
                 "embedding_dimensions_actual": self.vectors.shape[1] if self.vectors is not None else None,
                 "retrieval_unit": "seed_plus_linked_notes", "answer_protocol": "framework_unified"}
 
     def snapshot(self):
         return {"notes": [asdict(note) for note in self.notes], "evolution_count": self.evolution_count}
 
-    def _complete(self, prompt, schema):
-        result = self.controller.complete(prompt, schema)
-        _validate(result, schema)
-        return result
+    def _complete(self, prompt, schema, *, purpose):
+        result = self.controller.complete(prompt, schema, purpose=purpose)
+        prepared = prepare_response(result, schema, purpose=purpose)
+        if prepared.ignored_extra_fields:
+            event("amem.response.extra_fields_ignored", count=prepared.ignored_extra_fields,
+                  **getattr(self.controller, "last_response_metadata", {}))
+        return prepared.data
+
+    def close(self):
+        self._resources.close()
 
     def _encode(self, texts):
-        vectors = np.asarray(self.embedder.encode(texts), dtype=float)
-        if vectors.ndim != 2 or vectors.shape[0] != len(texts) or vectors.shape[1] == 0:
-            raise ValueError("Invalid A-Mem embedding shape")
-        if not np.isfinite(vectors).all():
-            raise ValueError("A-Mem embeddings must be finite")
         dims = self.vectors.shape[1] if self.vectors is not None else self.settings.embedding_dims
-        if dims is not None and vectors.shape[1] != dims:
-            raise ValueError("A-Mem embedding dimension changed or mismatches configuration")
-        if np.any(np.linalg.norm(vectors, axis=1) == 0):
-            raise ValueError("A-Mem embeddings must be nonzero")
-        return vectors
+        return validate_vectors(self.embedder.encode(texts), rows=len(texts), dims=dims)
 
     def _evolve(self, note, neighbors, neighbor_number):
         self.evolution_stats["attempts"] += 1
@@ -81,7 +91,7 @@ class AMemBackend:
                 return self._complete(prompts.EVOLUTION_PROMPT.format(context=note.context,
                     content=note.content, keywords=note.keywords,
                     nearest_neighbors_memories=neighbors, neighbor_number=neighbor_number),
-                    prompts.EVOLUTION_SCHEMA)
+                    prompts.EVOLUTION_SCHEMA, purpose="evolution")
             except InvalidJSONResponse:
                 self.evolution_stats["skipped_invalid_json"] += 1
                 event("amem.evolution.skipped", reason="invalid_json",
@@ -103,23 +113,17 @@ class AMemBackend:
         return np.argsort(scores)[-min(k, len(self.notes)):][::-1].tolist()
 
     def ingest(self, session: Session):
-        for index, message in enumerate(session.messages):
-            try:
-                payload = json.loads(message["content"])
-            except (KeyError, TypeError, json.JSONDecodeError):
-                raise ValueError("A-Mem expects normalized historical messages") from None
-            if not isinstance(payload, dict) or not all(isinstance(payload.get(k), str) for k in ("speaker", "text")):
-                raise ValueError("A-Mem history must contain speaker and text")
-            # Preserve the original evaluation harness's turn rendering (including spacing).
-            content = "Speaker " + payload["speaker"] + "says : " + payload["text"]
+        for index, turn in enumerate(session.turns()):
+            # Preserve the original evaluation harness's turn rendering.
+            content = "Speaker " + turn.speaker + "says : " + turn.text
             with stage("amem.write.note", message_index=index + 1, message_total=len(session.messages),
                        session=session.id, notes_before=len(self.notes)):
-                self._add_note(content, session.date, session.id, str(payload.get("source_id", f"{session.id}:{index}")))
+                self._add_note(content, session.date, session.id, turn.source_id)
                 event("amem.note.saved", notes=len(self.notes), evolutions=self.evolution_count)
 
     def _add_note(self, content, timestamp, session_id, source_id):
         with stage("amem.analyze", model=self.model):
-            metadata = self._complete(prompts.ANALYSIS_PROMPT + content, prompts.ANALYSIS_SCHEMA)
+            metadata = self._complete(prompts.ANALYSIS_PROMPT + content, prompts.ANALYSIS_SCHEMA, purpose="analysis")
         note = Note(uuid4().hex, source_id, session_id, timestamp, content, metadata["keywords"],
                     metadata["context"] or "General", metadata["tags"])
         with stage("amem.neighbors", limit=self.settings.neighbor_k):
@@ -131,35 +135,15 @@ class AMemBackend:
         evolution = self._evolve(note, neighbors, len(indices))
         should_evolve = evolution is not None and evolution["should_evolve"]
         event("amem.evolution.decision", should_evolve=should_evolve, skipped=evolution is None)
-        # Atomic note write: no memory/index changes become visible before all steps succeed.
-        updated = deepcopy(self.notes)
-        count = self.evolution_count
-        if should_evolve:
-            if any(a not in {"strengthen", "update_neighbor"} for a in evolution["actions"]):
-                raise ValueError("A-Mem returned an unknown evolution action")
-            if "strengthen" in evolution["actions"]:
-                links = evolution["suggested_connections"]
-                if any(i not in indices for i in links):
-                    raise ValueError("A-Mem returned a link outside the supplied neighbors")
-                note.links = [updated[i].id for i in links]
-                note.tags = evolution["tags_to_update"]
-            if "update_neighbor" in evolution["actions"]:
-                contexts, tags = evolution["new_context_neighborhood"], evolution["new_tags_neighborhood"]
-                # Match upstream memory_layer.py:844-858: extra items are ignored,
-                # short tag lists update only a prefix; missing contexts stay intact.
-                applied = min(len(indices), len(tags))
-                if len(contexts) != len(indices) or len(tags) != len(indices):
-                    event("amem.neighbor_updates.length_mismatch", policy="upstream_positional_prefix",
-                          neighbors=len(indices), context_items=len(contexts), tag_items=len(tags),
-                          applied_neighbors=applied, ignored_context_items=max(0, len(contexts) - applied),
-                          ignored_tag_items=max(0, len(tags) - applied),
-                          preserved_contexts=max(0, applied - len(contexts)))
-                for offset in range(applied):
-                    updated[indices[offset]].tags = tags[offset]
-                    if offset < len(contexts):
-                        updated[indices[offset]].context = contexts[offset]
-            count += 1
-        updated.append(note)
+        proposed = apply_evolution(self.notes, note, evolution, indices)
+        for key, amount in proposed.adjustments.items():
+            self.output_adjustments[key] += amount
+        for name, fields in proposed.diagnostics:
+            event(name, **fields, **getattr(self.controller, "last_response_metadata", {}))
+        updated = proposed.notes
+        note = updated[-1]
+        count = self.evolution_count + int(proposed.should_evolve)
+        # Commit memory/index state only after all embedding work succeeds.
         if should_evolve and count % self.settings.evolution_threshold == 0:
             with stage("amem.index.rebuild", notes=len(updated)):
                 vectors = self._encode([n.indexed_text(consolidated=True) for n in updated])
@@ -175,7 +159,7 @@ class AMemBackend:
         if not self.notes:
             return []
         with stage("amem.query.rewrite", model=self.model):
-            generated = self._complete(prompts.QUERY_PROMPT.format(question=query), prompts.QUERY_SCHEMA)["keywords"]
+            generated = self._complete(prompts.QUERY_PROMPT.format(question=query), prompts.QUERY_SCHEMA, purpose="query")["keywords"]
         if not generated.strip():
             raise ValueError("A-Mem query generator returned empty keywords")
         indices = self._search(generated, limit)

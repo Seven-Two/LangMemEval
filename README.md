@@ -65,6 +65,7 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 
 详见 [使用与注册新方法](docs/development.md)。单个项目采用可编辑安装；
 修改代码后重启评测即可，所有命令均在仓库根目录运行。
+模块边界、方法参数注册、资源生命周期与论文实验注意事项见 [架构说明](docs/architecture.md)。
 
 源码已统一到根目录 `src/`，不再有嵌套的 `MemEval/` 或 `LangMemEval/` 项目。
 从旧布局更新后运行 `uv sync --locked --extra dev`，刷新可编辑安装的包路径；

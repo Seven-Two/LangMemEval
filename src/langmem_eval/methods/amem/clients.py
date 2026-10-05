@@ -3,54 +3,25 @@
 The structured-output policy belongs to A-Mem. Embedding clients live in
 langmem_eval.embeddings; no model is loaded at import time.
 """
-import json
 import os
 from agents_memory.diagnostics import event
 from ...llm_diagnostics import DiagnosticHttpClient, chat_completion
 from ...model_api import validate_base_url
 from .config import AMemSettings
-from .prompts import EVOLUTION_SCHEMA
-
-
-class InvalidJSONResponse(ValueError):
-    """Only a JSON decoding failure, never a transport or schema failure."""
-
-
-def _validate(value, schema):
-    """Validate the small, fixed upstream JSON schemas even in prompt-only mode."""
-    kind = schema.get("type")
-    valid = {"object": isinstance(value, dict), "array": isinstance(value, list),
-             "string": isinstance(value, str), "boolean": type(value) is bool,
-             "integer": type(value) is int}
-    if kind in valid and not valid[kind]:
-        raise ValueError(f"A-Mem response must have type {kind}")
-    if kind == "object":
-        if any(k not in value for k in schema.get("required", [])):
-            raise ValueError("A-Mem response is missing required fields")
-        properties = schema.get("properties", {})
-        if schema.get("additionalProperties") is False and set(value) - set(properties):
-            raise ValueError("A-Mem response contains unknown fields")
-        for key, item in value.items():
-            if key in properties:
-                _validate(item, properties[key])
-    elif kind == "array":
-        for item in value:
-            _validate(item, schema["items"])
+from .responses import ResponsePurpose, decode_response, prepare_response
 
 
 class OpenAIController:
     def __init__(self, model: str, settings: AMemSettings, *, client=None):
         from openai import OpenAI
         validate_base_url(os.getenv("OPENAI_BASE_URL"))
+        self._owns_client = client is None
         self.client = client if client is not None else OpenAI(http_client=DiagnosticHttpClient())
         self.model, self.settings = model, settings
         self.last_response_metadata = {}
 
-    def complete(self, prompt: str, schema: dict) -> dict:
+    def complete(self, prompt: str, schema: dict, *, purpose: ResponsePurpose = "generic") -> dict:
         self.last_response_metadata = {}
-        # The fixed evolution schema identifies the upstream parsing policy;
-        # keep the same complete(prompt, schema) interface for injected clients.
-        is_evolution = schema == EVOLUTION_SCHEMA
         mode = self.settings.response_format
         kwargs = {}
         if mode == "json_schema":
@@ -68,25 +39,15 @@ class OpenAIController:
         choice = response.choices[0]
         if choice.finish_reason == "length":
             event("amem.response.truncated", **self.last_response_metadata,
-                  policy="parse_evolution" if is_evolution else "fail",
+                  policy="parse_and_validate",
                   max_output_tokens=self.settings.max_output_tokens)
-            if not is_evolution:
-                raise ValueError("A-Mem structured response was truncated; increase AMEM_MAX_OUTPUT_TOKENS")
-        content = choice.message.content
-        if not isinstance(content, str) or (not is_evolution and not content.strip()):
-            raise ValueError("A-Mem received an empty structured response")
-        content = content.strip()
-        if content.startswith("```") and content.endswith("```"):
-            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        if is_evolution:
-            # Upstream process_memory extracts the outer object before decoding.
-            # Do not repair partial JSON or issue another model request.
-            start, end = content.find("{"), content.rfind("}")
-            if start != -1 and end != -1:
-                content = content[start:end + 1]
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError:
-            raise InvalidJSONResponse("A-Mem received invalid JSON") from None
-        _validate(result, schema)
-        return result
+        parsed = decode_response(choice.message.content, purpose=purpose)
+        prepared = prepare_response(parsed, schema, purpose=purpose)
+        if prepared.ignored_extra_fields:
+            event("amem.response.extra_fields_ignored", count=prepared.ignored_extra_fields,
+                  **self.last_response_metadata)
+        return prepared.data
+
+    def close(self):
+        if self._owns_client:
+            self.client.close()
