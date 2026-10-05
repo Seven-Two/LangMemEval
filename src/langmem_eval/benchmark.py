@@ -34,6 +34,18 @@ def build_memory(conv: dict, backend: interfaces.MemoryBackend) -> None:
     sessions = extract_sessions(conv)
     total = sum(len(session.messages) for session in sessions)
     event("write.plan", sessions=len(sessions), messages=total)
+    restore = getattr(backend, "restore_cached_memory", None)
+    save = getattr(backend, "save_cached_memory", None)
+    if callable(restore) != callable(save):
+        raise TypeError("Memory cache hooks must implement both restore_cached_memory and save_cached_memory")
+    if callable(restore):
+        with stage("write.cache.load"):
+            restored = restore(sessions)
+        if type(restored) is not bool:
+            raise TypeError("restore_cached_memory must return bool")
+        if restored:
+            event("write.cache.reused", sessions=len(sessions), messages=total)
+            return
     completed = 0
     for index, session in enumerate(sessions, 1):
         with stage("write.session", session=session.id, session_index=index,
@@ -41,6 +53,13 @@ def build_memory(conv: dict, backend: interfaces.MemoryBackend) -> None:
             backend.ingest(session)
         completed += len(session.messages)
         event("write.progress", messages_done=completed, messages_total=total)
+    finalize = getattr(backend, "finalize", None)
+    if callable(finalize):
+        with stage("write.finalize"):
+            finalize()
+    if callable(save):
+        with stage("write.cache.save"):
+            save(sessions)
 
 
 @lru_cache(maxsize=8)

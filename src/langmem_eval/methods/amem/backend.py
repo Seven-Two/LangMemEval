@@ -51,6 +51,7 @@ class AMemBackend:
         self.output_adjustments = {"filtered_link_responses": 0, "filtered_links": 0,
                                    "ignored_action_responses": 0, "ignored_actions": 0}
         self.last_retrieval = None
+        self.cache_info = {"mode": self.settings.cache_mode, "status": "off" if self.settings.cache_mode == "off" else "not_checked"}
 
     def describe(self):
         return {"implementation": IMPLEMENTATION, "upstream_commit": UPSTREAM_COMMIT,
@@ -63,11 +64,20 @@ class AMemBackend:
                 "unknown_action_policy": "upstream_ignore",
                 "response_validation_policy": "active_fields_ignore_extras_parse_length",
                 "output_adjustments": dict(self.output_adjustments),
+                "memory_cache": dict(self.cache_info),
                 "embedding_dimensions_actual": self.vectors.shape[1] if self.vectors is not None else None,
                 "retrieval_unit": "seed_plus_linked_notes", "answer_protocol": "framework_unified"}
 
     def snapshot(self):
         return {"notes": [asdict(note) for note in self.notes], "evolution_count": self.evolution_count}
+
+    def restore_cached_memory(self, sessions):
+        from .cache import restore
+        return restore(self, sessions)
+
+    def save_cached_memory(self, sessions):
+        from .cache import save
+        save(self, sessions)
 
     def _complete(self, prompt, schema, *, purpose):
         result = self.controller.complete(prompt, schema, purpose=purpose)

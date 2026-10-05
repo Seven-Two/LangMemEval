@@ -1,6 +1,6 @@
 """Resolve evaluation configuration once: CLI > dotenv > process env > defaults.
 
-The scoped environment bridges existing SDKs and native evaluators. Its previous
+The scoped environment bridges method SDKs and the shared evaluator. Its previous
 values are restored even when evaluation fails; no CLI overrides leak into the
 next experiment in the same Python process. Service (AML_*) settings are separate.
 """

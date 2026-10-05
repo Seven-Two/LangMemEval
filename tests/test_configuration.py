@@ -148,11 +148,12 @@ def test_api_embedding_dims_auto_is_distinct_from_invalid_zero(monkeypatch):
         EmbeddingSettings.from_env()
 
 
-def test_native_adapters_cannot_silently_ignore_embedding_cli(tmp_path, monkeypatch):
+def test_all_methods_show_unified_configuration_without_loading_sdks(tmp_path, monkeypatch, capsys):
     from agents_memory import runner
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(runner, "SYSTEMS", {"native": {"fn": lambda *args: [],
-                        "architecture": "test", "infrastructure": "none"}})
-    monkeypatch.setattr("sys.argv", ["eval", "--systems", "native", "--embedding-model", "test", "--show-config"])
-    with pytest.raises(SystemExit, match="registered methods only"):
-        runner.main()
+    monkeypatch.setattr("sys.argv", ["eval", "--systems", "all", "--embedding-model", "test", "--show-config"])
+    runner.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["models"]["embedding"]["embedding_model"] == "test"
+    assert set(report["systems"]) == {"amem", "langmem"}
+    assert report["embedding_scope"] == {"amem": "shared", "langmem": "shared"}

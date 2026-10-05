@@ -40,11 +40,16 @@ class Session:
 
 
 class MemoryBackend(Protocol):
-    """Synchronous writes and ranked, complete evidence records for retrieval.
+    """Ordered history ingestion and ranked, complete evidence for retrieval.
 
     Methods receive history and questions, never evaluation answers. Retrieval
     returns at most limit records; the adapter owns token budgets and answering.
     Optional describe() and last_retrieval expose JSON-serializable audit data.
+    Optional finalize() flushes batched writes once, before any QA starts;
+    otherwise each ingest() must finish its writes synchronously.
+    Optional paired restore_cached_memory(sessions)->bool / save_cached_memory(sessions)
+    reuse completed history-only state. The backend owns cache identity/validation;
+    saving happens only after successful ingestion/finalize, before any QA.
     Optional close() releases owned resources after success or failure. Injected
     resources belong to the caller. Instances are conversation-local, not shared.
     """

@@ -56,11 +56,10 @@ def test_new_method_cli_dotenv_and_settings_need_no_core_edits(extension, tmp_pa
 
 def test_new_method_full_runner_records_configuration_and_protocol(extension, tmp_path, monkeypatch):
     import openai
-    from agents_memory import runner, systems
+    from agents_memory import runner
     from langmem_eval.methods.my_method.config import Settings
 
     monkeypatch.delenv("MY_METHOD_WINDOW", raising=False)
-    monkeypatch.setattr(runner, "SYSTEMS", systems.discover_systems())
     monkeypatch.setattr(runner, "start", lambda: None)
     sent = []
 
@@ -91,24 +90,14 @@ def test_new_method_full_runner_records_configuration_and_protocol(extension, tm
     assert Settings.from_env().window == 100  # CLI overrides never leak
 
 
-def test_missing_selected_native_dependency_is_explicit_and_lazy(monkeypatch):
-    from agents_memory import systems
-    original = systems.importlib.import_module
-    imported = []
-
-    def load(name, *args, **kwargs):
-        if name == "agents_memory.systems.simplemem":
-            imported.append(name)
-            raise ModuleNotFoundError("No module named 'simplemem'")
-        return original(name, *args, **kwargs)
-
-    monkeypatch.setattr(systems.importlib, "import_module", load)
-    entries = systems.discover_systems()
-    assert "simplemem" in entries and imported == []
-    assert entries["amem"]["architecture"] and imported == []
-    with pytest.raises(ValueError, match="optional dependency"):
-        entries["simplemem"]["fn"]
-    assert imported == ["agents_memory.systems.simplemem"]
+def test_missing_selected_dependency_is_explicit_and_lazy(monkeypatch):
+    from langmem_eval.registry import Method, check_dependencies
+    method = Method(factory=lambda model: None, architecture="test", infrastructure="test",
+                    dependencies=("missing_test_sdk",), extra="test-extra")
+    original = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None if name == "missing_test_sdk" else original(name))
+    with pytest.raises(ValueError, match="uv sync --locked --extra test-extra"):
+        check_dependencies("test_method", method)
 
 
 def test_duplicate_configuration_bindings_fail_before_model_calls(monkeypatch):
@@ -131,15 +120,15 @@ class Guard(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split('.')[0] in {'torch', 'sentence_transformers', 'simplemem', 'mem0', 'graphiti_core'}:
             raise AssertionError('Unexpected optional SDK: ' + fullname)
-        if fullname.startswith('agents_memory.systems.') and not fullname.endswith('._helpers'):
-            raise AssertionError('Unselected native baseline: ' + fullname)
+        if fullname.startswith('agents_memory.systems'):
+            raise AssertionError('Removed legacy baseline path: ' + fullname)
         if fullname.endswith('.backend') and fullname.startswith('langmem_eval.methods.'):
             raise AssertionError('Method constructed during discovery: ' + fullname)
 sys.meta_path.insert(0, Guard())
 from agents_memory import runner
-from agents_memory.systems import SYSTEMS
+from langmem_eval.registry import discover_methods
 from langmem_eval.evaluation import evaluate_questions
-assert {'amem', 'langmem', 'simplemem'} <= SYSTEMS.keys()
+assert set(discover_methods()) == {'amem', 'langmem'}
 sys.argv = ['eval', '--help']
 try:
     runner.main()

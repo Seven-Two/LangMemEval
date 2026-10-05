@@ -3,7 +3,6 @@ import importlib
 import pkgutil
 import re
 from dataclasses import dataclass
-from functools import partial
 from typing import Callable
 
 from .interfaces import MemoryBackend
@@ -40,13 +39,17 @@ class Method:
     aml_factory: Callable | None = None
     options: tuple[MethodOption, ...] = ()
     public_config: Callable[[], dict] | None = None
+    dependencies: tuple[str, ...] = ()
+    extra: str | None = None
+    embedding_scope: str = "shared"
 
 
 METHODS: dict[str, Method] = {}
 
 
 def register_method(name: str, *, architecture: str, infrastructure: str = "custom", aml_factory=None,
-                    options: tuple[MethodOption, ...] = (), public_config=None):
+                    options: tuple[MethodOption, ...] = (), public_config=None,
+                    dependencies: tuple[str, ...] = (), extra=None, embedding_scope="shared"):
     """Decorate a factory/class accepting the benchmark model as one argument."""
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or name == "all":
         raise ValueError(f"Invalid method name: {name!r}")
@@ -60,7 +63,8 @@ def register_method(name: str, *, architecture: str, infrastructure: str = "cust
             raise TypeError("Method options must be MethodOption instances")
         if public_config is not None and not callable(public_config):
             raise TypeError("public_config must be a callable without model initialization")
-        METHODS[name] = Method(factory, architecture, infrastructure, aml_factory, tuple(options), public_config)
+        METHODS[name] = Method(factory, architecture, infrastructure, aml_factory, tuple(options), public_config,
+                               tuple(dependencies), extra, embedding_scope)
         return factory
     return register
 
@@ -78,16 +82,17 @@ def create_backend(name: str, model: str) -> MemoryBackend:
     methods = discover_methods()
     if name not in methods:
         raise ValueError(f"Unknown method {name!r}; available: {', '.join(sorted(methods))}")
+    check_dependencies(name, methods[name])
     backend = methods[name].factory(model)
     if not all(callable(getattr(backend, attr, None)) for attr in ("ingest", "retrieve")):
         raise TypeError(f"Method {name!r} must implement ingest and retrieve")
     return backend
 
 
-def system_entries():
-    from .adapter import run_method
-    return {
-        name: {"architecture": spec.architecture, "infrastructure": spec.infrastructure,
-               "fn": partial(run_method, name)}
-        for name, spec in discover_methods().items()
-    }
+def check_dependencies(name: str, method: Method):
+    """Check selected SDK availability without importing it or constructing models."""
+    import importlib.util
+    missing = [module for module in method.dependencies if importlib.util.find_spec(module) is None]
+    if missing:
+        install = f"uv sync --locked --extra {method.extra}" if method.extra else "install its dependencies"
+        raise ValueError(f"Method {name!r} needs {', '.join(missing)}; {install}")

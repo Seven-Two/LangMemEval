@@ -19,7 +19,6 @@ def test_invalid_duplicate_and_unknown():
 
 def test_new_file_discovery_and_memeval_registration(tmp_path, monkeypatch):
     import langmem_eval.methods as package
-    import agents_memory.systems as systems
 
     (tmp_path / "demo.py").write_text('''
 from langmem_eval.registry import register_method
@@ -36,9 +35,8 @@ class Backend:
     monkeypatch.setattr(package, "__path__", [*package.__path__, str(tmp_path)])
     try:
         importlib.invalidate_caches()
-        importlib.reload(systems)
-        assert "test_demo" in systems.SYSTEMS
-        assert systems.SYSTEMS["test_demo"]["architecture"] == "offline test"
+        assert "test_demo" in discover_methods()
+        assert discover_methods()["test_demo"].architecture == "offline test"
         first = create_backend("test_demo", "offline")
         second = create_backend("test_demo", "offline")
         first.ingest("history")
@@ -49,4 +47,3 @@ class Backend:
         METHODS.pop("test_demo", None)
         sys.modules.pop("langmem_eval.methods.demo", None)
         monkeypatch.undo()
-        importlib.reload(systems)

@@ -27,7 +27,7 @@ uv run --extra amem langmem-eval --list-methods
 当前依赖固定为 PyTorch 2.7.1、Sentence Transformers 5.1.2、Transformers 4.57.6。
 Linux x86_64 从官方 `cu118` 索引安装 `torch==2.7.1+cu118`，使用 CUDA 11.8
 运行库；Windows 开发环境使用 CPU 构建。Python 范围限制为 `>=3.12,<3.14`，
-以匹配该 PyTorch 的 wheel。`training` 组也固定 PyTorch 版本，避免一起安装时升级回 CUDA 13。
+以匹配该 PyTorch 的 wheel。当前不包含额外研究方法的训练依赖组。
 
 NVIDIA 510.54 满足 CUDA 11.x 小版本兼容的基础驱动条件，但不代表所有 CUDA 功能
 都支持；矩池云上的实际 GPU 运算和 MiniLM 编码仍需验证。本次依赖调整未进行云端 GPU 实测。
@@ -85,7 +85,8 @@ commit，可进一步固定权重。本实现没有自动选择最新 revision �
 LLM_EXTRA_BODY={"enable_thinking":false}
 ```
 
-该附加参数用于 A-Mem、LangMem 的聊天请求和统一回答请求，**不自动应用于裁判或原生 baseline 内部的 LLM**。
+该附加参数用于 A-Mem、LangMem 的聊天请求和统一回答请求，
+**不自动应用于裁判**。各参数范围见 [统一配置](configuration.md)。
 不支持的参数会导致服务报错；不要将密钥或模型名写入 `LLM_EXTRA_BODY`。
 
 如果使用 embedding API，无需 `amem` 可选依赖，用 `uv sync --locked --extra dev` 安装即可。
@@ -126,8 +127,83 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 ```
 
 `--num-samples` 指对话数量，不是问题数量；一段完整对话也可能写入很多笔记。
-首次调通请使用小样例。正式比较时用同一份 `--data-file` 和相同协议运行所有方法，
+首次调通请使用小样例。完整历史会产生大量顺序写入调用，反复调试可使用下面的记忆缓存。
+正式比较时用同一份 `--data-file` 和相同协议运行所有方法，
 不要因某个方法失败而删题。去掉 `--skip-judge` 前另行确认裁判模型与服务兼容。
+
+### 复用已经构建的记忆，避免重复写入
+
+`--num-samples 1` 表示一个完整 conversation，包含多个 session 和很多历史消息，
+并不是一条消息。A-Mem 逐条调用模型生成笔记、判断连接和演化，再处理下一条消息，
+因此单个样本也可能花费数小时。写入依赖已有状态，不能直接全部并行而保持相同算法。
+
+缓存默认关闭。建议首次构建时显式启用：
+
+```bash
+uv run --extra amem langmem-eval \
+  --systems amem --benchmark locomo --protocol locomo \
+  --data-file data/locomo10.json --num-samples 1 --skip-judge \
+  --amem-cache-mode reuse --amem-cache-dir data/amem-cache \
+  --output-dir results/amem-first
+```
+
+该命令仍会调用真实模型。完整历史写入成功后，框架先保存缓存，再开始逐题问答。
+即使回答阶段失败或中断，已经成功保存的记忆也可在下次复用。
+没有缓存的首次构建不会加速；此前的汇总结果、日志和 answer_trace 不能还原完整记忆图及索引。
+
+调整 `--top-k`、上下文预算、回答温度/输出预算或测试问题后，可使用 `require`：
+
+```bash
+uv run --extra amem langmem-eval \
+  --systems amem --benchmark locomo --protocol locomo \
+  --data-file data/locomo10.json --num-samples 1 --skip-judge \
+  --amem-cache-mode require --amem-cache-dir data/amem-cache \
+  --top-k 20 --context-tokens 6000 --max-output-tokens 256 \
+  --output-dir results/amem-retrieval-20
+```
+
+| 模式 | 行为 |
+| --- | --- |
+| `off` | 默认；不读写缓存，每次构建记忆 |
+| `reuse` | 有匹配缓存就读取，没有则构建并保存 |
+| `require` | 必须命中有效缓存，否则报错，不启动历史写入 |
+| `refresh` | 强制重新构建，全部写入成功后原子替换同键缓存 |
+
+对应 `.env` 设置为 `AMEM_CACHE_MODE`、`AMEM_CACHE_DIR`；命令行优先。
+默认目录 `data/amem-cache` 相对于启动目录，与 `--output-dir` 无关；换输出目录不会丢失缓存。
+它不会自动跟随 `EVAL_DATA_DIR`，需要时显式设置缓存目录。
+
+缓存键包含历史消息/顺序/时间/来源、聊天模型及服务地址、embedding 配置、A-Mem 写入参数、
+完整 LLM 附加选项，以及相关源码和依赖版本。修改这些条件会生成新键。
+API 密钥不进入键；目录、缓存模式、QA、样本编号和 `EVAL_*` 回答协议不进入键。
+设备、batch size 等 embedding 设置也保守地纳入键，切换环境可能需要重新构建。
+
+注意 `LLM_MODEL` 当前同时控制写入、查询改写和回答，修改它会失效缓存；
+`LLM_EXTRA_BODY` 也会影响写入，所以修改 thinking 设置同样需要重建。
+仅改变 `EVAL_TEMPERATURE`、`EVAL_MAX_OUTPUT_TOKENS` 等最终回答参数不会失效缓存。
+若模型 ID 背后的服务权重发生变化、或本地同一路径权重被替换，框架不能自动识别，
+应固定 embedding revision，并显式 `refresh`。修改源码也会保守地失效缓存。
+
+缓存为 JSON，保存笔记 UUID、链接、原始向量矩阵、演化计数和诊断计数。
+加载时不会重新编码笔记，避免改变上游延迟重建索引的语义。
+校验包括文件内容摘要、状态结构、链接身份和向量有效性；损坏时明确报错，
+不会自动开始昂贵的重建，可显式用 `refresh` 修复。缓存是本地可信实验文件，摘要不是签名。
+保存采用临时文件加原子替换，失败的构建不会覆盖已有完整缓存。
+仅缓存全部历史写完的状态，**不支持写入中途断点恢复**，也不缓存检索结果或最终答案。
+
+日志中的 `amem.cache.hit/miss/saved/refresh` 表示缓存状态，`write.cache.load/save` 记录耗时。
+逐题 `answer_trace.method_config.memory_cache` 保存状态、键、路径、构建 ID、生成时间和内容摘要。
+缓存命中仍需初始化聊天客户端和 embedding 模型，并为每道题查询改写、编码及生成答案；
+省去的是历史写入 LLM 调用和历史向量编码，不保证启动时间或整个实验为零成本。
+
+缓存中的记忆文本和向量属于实验数据，默认目录被 Git 忽略，不要上传到公开仓库。
+配置密钥和附加请求体不会写入缓存文件；记忆内容自身仍可能包含历史中的敏感信息。
+同一缓存建议顺序使用；并发 miss 不会合并写入请求，可能重复构建，最终保存的文件保持完整。
+
+正式报告区分首次构建成本和缓存复用后的问答成本。命中时成本统计只记录本次实际调用，
+不会重复计入之前的写入开销；不能把缓存命中运行的低成本说成完整 A-Mem 构建成本。
+多次运行复用同一份记忆仅测量该记忆下的回答变化；测量完整算法随机性需关闭缓存，
+或每次刷新/使用独立缓存目录。原始写入实验的日志和结果应一并保留。
 
 ## 3. 写入、检索与差异
 
@@ -153,7 +229,7 @@ uv run --extra amem langmem-eval --systems amem --benchmark locomo --num-samples
 | 失败处理 | 演化 JSON 解码失败时跳过本次演化，保留分析后的新笔记；所有截断响应先尝试解析；分析/查询非法 JSON、实际使用字段的缺失/类型错误、非法向量及网络错误仍显式失败；单条笔记原子提交 |
 | 索引重建 | 重用相同 embedding 实例、批量重编码，省略重建前会被丢弃的新笔记单独编码；不重载模型 |
 | 模型接口 | OpenAI 兼容聊天；可选远程 embedding；并非移植上游所有 Ollama/sglang 控制器 |
-| 持久化和赛事 | 每段对话使用独立内存状态；未接入 AML 的持久化 Add/Search 服务，也未实现断点恢复 |
+| 持久化和赛事 | 可选缓存完整历史写入后的状态，各对话独立；未接入 AML 持久化 Add/Search，也不支持写入中途断点恢复 |
 
 `AMEM_NEIGHBOR_K=5`、`AMEM_EVOLUTION_THRESHOLD=100`、`AMEM_TEMPERATURE=0.7`、
 `AMEM_MAX_OUTPUT_TOKENS=1000` 是默认记忆配置。
@@ -315,7 +391,8 @@ PYTHON_DOTENV_DISABLED=1 uv run --locked --extra dev python -m pytest -q tests/t
 `judge`、`waiting` 等当前状态；预计剩余时间会随模型响应速度波动。
 回答阶段的 `errors` 表示已处理题中的回答或裁判错误数，不是答错题数。
 失败或中断不会把未完成的写入补成 100%；终端进度条不写入日志文件，
-stderr 不连接交互终端时自动禁用。原生 baseline 内部阶段未统一接入，保留外层对话进度。
+stderr 不连接交互终端时自动禁用。全部方法共用外层进度；批量方法在 `write.finalize`
+阶段执行实际写入，SDK 内部步骤不一定有逐条进度。
 
 无需增加参数，继续使用原来的运行命令。日志保存在 `--output-dir` 指定目录中的
 `run_<run_tag>.log`，启动时会打印具体路径（精简模式显示 `Log: ...`）。

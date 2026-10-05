@@ -9,12 +9,10 @@ pytest.importorskip("agents_memory")
 def test_registered_plugin_and_real_scoring(monkeypatch):
     import openai
     import langmem_eval.methods.langmem.backend
-    from agents_memory.systems import SYSTEMS
+    from langmem_eval.registry import discover_methods
     from langmem_eval.adapter import run_method
 
-    assert SYSTEMS["langmem"]["fn"].func is run_method
-    assert SYSTEMS["langmem"]["fn"].args == ("langmem",)
-    assert all("prob" not in name for name in SYSTEMS if name.startswith("langmem"))
+    assert "langmem" in discover_methods()
 
     writes = []
 
@@ -38,6 +36,6 @@ def test_registered_plugin_and_real_scoring(monkeypatch):
     conv = {"sample_id": "offline", "conversation": {
         "session_1": [{"speaker": "Alice", "text": "I live in Berlin"}]
     }, "qa": [{"question": "Where does Alice live?", "answer": "Berlin", "category": 1}]}
-    result = SYSTEMS["langmem"]["fn"](conv, "offline", False)
+    result = run_method("langmem", conv, "offline", False)
     assert len(result) == 1 and result[0]["f1"] == 1.0
     assert len(writes) == 1 and "Where does Alice" not in writes[0]

@@ -50,8 +50,9 @@ def test_runner_logs_failure_and_keeps_manifest(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("device unavailable")
     monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
-    monkeypatch.setattr(runner, "SYSTEMS", {"offline": {
-        "fn": fail, "architecture": "test", "infrastructure": "none"}})
+    from langmem_eval.registry import Method
+    monkeypatch.setattr(runner, "discover_methods", lambda: {"offline": Method(lambda model: None, "test", "none")})
+    monkeypatch.setattr(runner, "run_method", fail)
     monkeypatch.setattr(runner, "start", lambda: None)
     monkeypatch.setattr("sys.argv", ["eval", "--systems", "offline", "--skip-judge",
         "--data-file", str(data), "--output-dir", str(tmp_path)])

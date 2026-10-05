@@ -32,7 +32,7 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 - `src/langmem_eval/adapter.py`：唯一的评测适配器实现。
 - `src/langmem_eval/cli.py`：调用 `agents_memory.runner.main` 的统一入口。
 - `src/agents_memory/runner.py`：实验清单、执行、结果落盘与汇总。
-- `src/agents_memory/systems/__init__.py`：统一方法注册桥接、原生 baseline 延迟加载。
+- `src/langmem_eval/registry.py`：唯一方法注册表；运行器直接调用共享适配器，无第二套 systems 注册。
 - `src/langmem_eval/lifecycle.py`：方法资源释放；异常时保留原始错误。
 
 模块边界、改动位置和离线验收依据见 [架构说明](architecture.md)。
@@ -44,11 +44,11 @@ uv run langmem-eval --benchmark locomo --systems langmem --num-samples 1 --llm-m
 评测统一使用 `uv run langmem-eval`；不再保留旧脚本运行入口。
 上游文档、许可证和历史示例图归档到 `third_party/memeval/`；其中配置示例不自动生效。
 
-数据默认写到当前工作目录 `data/`，训练模型到 `models/`，实验结果到 `results/`。
+数据默认写到当前工作目录 `data/`，实验结果到 `results/`；`models/` 是可供扩展使用的模型目录。
 可用 `EVAL_DATA_DIR`、`EVAL_MODELS_DIR`、`EVAL_RESULTS_DIR` 配置绝对或相对路径；
 这些目录不依赖源码位置，wheel 安装也不会向 site-packages 写入数据。
 LoCoMo 缓存在数据目录根层，LongMemEval 缓存在其 `longmemeval/` 子目录。
-`--output-dir` 和 `MEMORY_R1_MM_ADAPTER`/`MEMORY_R1_AA_ADAPTER` 等显式参数仍优先。
+`--output-dir` 等显式参数仍优先。当前不包含额外方法的训练入口。
 LangMem 使用固定版本依赖，不复制第三方源码。依赖解析记录在 uv.lock 中。
 如需修改 LangMem 本身，可将其源码克隆到本地，并在 tool.uv.sources 中指定
 editable 路径后重新 uv sync。当前优先通过 backend 中的接口组合进行扩展。
@@ -72,6 +72,7 @@ src/langmem_eval/
     │   ├── backend.py      # ingest、演化、retrieve 算法
     │   ├── config.py       # AMemSettings、环境变量
     │   ├── memory.py       # Note 数据结构及序列化
+    │   ├── cache.py        # 完整历史状态缓存、配置指纹及原子保存
     │   ├── prompts.py      # 固定上游提示词、输出 schema
     │   ├── clients.py      # LLM 传输及请求诊断
     │   ├── responses.py    # 纯 JSON 解析与字段校验策略
@@ -119,7 +120,9 @@ def create(model):
 | 接口 | 责任 |
 | --- | --- |
 | `__init__(model)` | 创建当前对话专属状态；模型/API 初始化在这里或延迟执行 |
-| `ingest(session)` | 同步完成历史写入；session.messages 是包含 speaker/text/date/source_id 的 JSON 消息 |
+| `ingest(session)` | 写入或暂存历史；session.messages 是包含 speaker/text/date/source_id 的 JSON 消息 |
+| `finalize()`（可选） | 框架在全部 ingest 后调用一次；批量方法必须在这里完成实际写入，之后才开始问答 |
+| `restore_cached_memory(sessions)` / `save_cached_memory(sessions)`（可选，成对实现） | 只接收历史 Session；restore 返回 bool，命中则跳过写入；全部写入及 finalize 成功后、QA 前调用 save；方法负责缓存键和完整性校验 |
 | `session.turns()` | 遍历 HistoricalTurn，提供 speaker/text/date/source_id；无需在新方法内反复解析 JSON |
 | `retrieve(query, limit)` | 返回按相关性排序、不超过 limit 个完整证据字符串，供共享适配器选择 |
 | `describe()`（可选） | 返回可 JSON 序列化的方法版本、参数等审计信息，排除密钥 |
@@ -141,10 +144,13 @@ uv run langmem-eval --systems langmem,my_method --num-samples 1 --skip-judge --o
 retrieve(query, limit) 的对象；每个样本都会重新创建对象。
 模块顶层只做定义与注册，模型初始化和可选依赖导入放进工厂/构造器。
 方法名使用小写字母、数字和下划线，以字母开头，不能为 all，也不能与
-其他 MemEval 系统重名；重名会明确报错。修改代码后重启评测即可。
+其他已注册方法重名；重名会明确报错。修改代码后重启评测即可。
 通过这个注册机制接入的方法共用 adapter 的回答/评分逻辑和上下文预算；方法元数据写入运行结果。
-MemEval 原生 systems 下的其他 baseline 仍使用自身回答逻辑，结果标记为 `adapter_protocol=native`。
-不能仅因为使用同一个 runner 就宣称这些 baseline 采用了相同的回答配置。
+当前内置的 A-Mem、LangMem 均采用此接口，结果标记为 `adapter_protocol=unified_v1`。
+其他方法需要按需求单独接入；接口说明见 [统一方法说明](unified-methods.md)。
+
+可选依赖通过 `register_method(..., dependencies=("sdk_import_name",), extra="extra_name")`
+声明。列方法、帮助和 `--show-config` 不加载 SDK；真实运行在开始调用模型前检查选中的依赖。
 
 ### 为新方法增加参数
 
@@ -184,7 +190,7 @@ def create(model):
 
 按 session 编号依次导入历史，保留说话人、时间和来源 ID；写入完成后才评测。
 每个样本独立 namespace/store，测试问题和答案不写回记忆。
-默认管理器删除关闭、更新检索 query_limit=5；回答 top_k=20。
+LangMem 默认管理器删除关闭、更新检索 query_limit=5；共享回答 top_k=20。
 读取采用真实分词器计数，逐条选择完整记录，不再截断字符串。
 默认 `EVAL_TOP_K=20`、`EVAL_CONTEXT_TOKENS=6000`、`EVAL_TOKENIZER=cl100k_base`。
 计数包含记录间的两个换行；超预算记录跳过，继续检查后续记录。不切开正文。
@@ -212,11 +218,12 @@ CLI 优先于 `.env`，`.env` 优先于进程环境变量。模型与算法参�
 `EVAL_EMPTY_CONTEXT`（abstain/answer）、`EVAL_ABSTENTION_TEXT`。
 命令行对应 `--protocol`、`--context-tokens`、`--tokenizer`、`--top-k`、
 `--max-output-tokens`、`--answer-temperature`、`--answer-style`、`--empty-context`、`--abstention-text`。
-协议最终值完整写入结果配置；原生 baseline 不应用这些覆盖项，配置记为 null。
-存储为进程内存，退出后不保留；尚未实现断点恢复。
+协议最终值完整写入所有方法的结果配置。当前离线评测使用每段对话独立的内存状态，
+完成后释放资源；A-Mem 可显式启用完整历史状态缓存，不支持写入中途或逐题进度的断点恢复。
+缓存不会带入测试题和参考答案；调用方式见 [A-Mem 指南](amem.md#复用已经构建的记忆避免重复写入)。
 
 输入是 MemEval 的 conversation/session_N 格式；原始 LongMemEval 数据应走其 loader。
-原生 baseline 仅在选中时导入；未选中的可选依赖不会影响统一方法的 CLI、评分或运行。
+方法的 SDK 仅在选中时导入；未选中的可选依赖不会影响 CLI、评分或运行。
 选中缺少依赖的 baseline 会在模型调用前明确报错，不静默移出比较清单。
 `--systems all` 包含所有已发现的方法，因此需要它们的可选依赖；日常实验建议明确列出方法名。
 运行前生成 `manifest_*.json`：固定题目 ID、原始样本 ID、题目、参考答案哈希及数据哈希。
@@ -246,7 +253,8 @@ LLM 输入/输出 Token 与 embedding Token 分列；费用未知时 `reported_c
 自动统计覆盖常见 OpenAI SDK Chat/Responses/Embeddings 的同步、异步入口和返回 usage 的流。
 SDK 内部重试不分别计数；其他供应商、远程服务、本地推理与后台线程不保证自动覆盖。
 因此始终标记 `coverage=partial`，不将统计称为整个系统总成本。
-旧 baseline 的未拆分调用记入 unclassified；统一适配器明确划分写入、检索与回答。
+统一适配器明确划分写入、检索与回答。第三方 SDK 自行创建的线程可能丢失阶段上下文，
+观察到但无法归属的调用仍记入 unclassified。
 普通工作线程需要显式传播 contextvars；跨进程无法自动传播阶段。
 
 新适配器可用以下接口补充未被自动观察的调用，已被 SDK 记录的调用不要重复上报：
@@ -263,8 +271,8 @@ with phase("retrieve"):
     )
 ```
 
-目前仍需逐个审计原生 baseline 的内部异常吞掉、远程状态隔离和自身协议。
-框架可以记录暴露出来的失败，不能检测第三方内部静默失败。
+接入层使用独立状态，写入异常不再通过旧包装器静默跳过；框架记录暴露出来的失败。
+第三方 SDK 内部的解析回退或静默失败仍不能一概检测到，正式实验需核对 SDK 版本和行为。
 
 ## 验证与来源
 
@@ -274,4 +282,4 @@ with phase("retrieve"):
 - LangMem：https://github.com/langchain-ai/langmem （0.0.30）
 - MemEval：https://github.com/ProsusAI/MemEval
   基础 commit：807ae6d7d8a5b76f6fe964d5a581d96c036e2ac4。
-  本地改动：可选依赖缺失处理，以及 langmem 薄入口。
+  本地改动：统一记忆方法接口、回答协议、预算、失败审计、配置、成本及日志。

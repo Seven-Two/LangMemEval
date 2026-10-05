@@ -3,9 +3,8 @@
 # and NOTICE. Local modification: synchronous execution and existing trace/error fields.
 """Synchronous evaluation for the unified (synchronous) memory interface.
 
-Native adapters retain their async-capable helper. This path needs no event loop
-or loopback socket, works inside notebook event loops, and shares the same scoring
-functions. Row semantics match agents_memory.systems._helpers._qa_results_async.
+This path needs no event loop or loopback socket and works inside notebook event
+loops. Asynchronous memory SDKs are adapted inside their own memory backend.
 """
 from copy import deepcopy
 from agents_memory.diagnostics import event, failure, stage

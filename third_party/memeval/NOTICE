@@ -35,7 +35,8 @@ components are set forth below.
    - src/memory/hybrid.ts    (mergeHybridResults, bm25RankToScore)
    - src/memory/manager-search.ts (searchVector)
 
-   The port is implemented in src/agents_memory/openclaw.py. The MIT License
+   In the original upstream project, the port was implemented in
+   src/agents_memory/openclaw.py (removed from this distribution). The MIT License
    permits creation of derivative works and is compatible with this project's
    Apache License 2.0.
 
@@ -241,5 +242,16 @@ For packages licensed under the Apache License 2.0, the full license text
 can be found at: http://www.apache.org/licenses/LICENSE-2.0
 
 ================================================================================
+LOCAL MODIFICATIONS (LangMemEval, 2026-10-05)
+
+This distribution retains MemEval dataset, scoring and experiment infrastructure.
+Its native baseline runners and method-specific training code have been removed.
+The supported LangMem and A-Mem integrations use one shared memory interface,
+answer protocol, evidence budget, failure reporting and phase accounting.
+The historical upstream third-party notices above are preserved for attribution;
+they do not declare additional supported methods or installed dependencies.
+See docs/unified-methods.md for the supported scope. Original notices and licenses
+remain applicable to the retained derived code.
+
 END OF NOTICE
 ================================================================================

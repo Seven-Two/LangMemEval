@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from agents_memory.experiment import compute_summary, failed_results, freeze_manifest, normalize_results
-from agents_memory.systems._helpers import _qa_results
+from langmem_eval.evaluation import evaluate_questions as _qa_results
 from langmem_eval.benchmark import select_context, token_encoding
 from langmem_eval.protocol import AnswerProtocol
 
@@ -89,7 +89,7 @@ def test_adapter_traces_exact_request_and_empty_policy(monkeypatch):
 
 
 def test_failed_answer_not_correct_abstention_and_judge_failure(monkeypatch):
-    import agents_memory.systems._helpers as helpers
+    from agents_memory import evaluation as helpers
     convs, _ = freeze_manifest([conversation()])
     def fail(q):
         raise RuntimeError("unavailable")
@@ -150,9 +150,10 @@ def test_runner_same_manifest_failed_system_preserved(tmp_path, monkeypatch):
     def bad(conv, *a, **kwargs):
         assert conv["conversation"]
         raise RuntimeError("offline failure")
-    systems = {name: {"fn": fn, "architecture": "test", "infrastructure": "none"}
-               for name, fn in (("good", good), ("bad", bad))}
-    monkeypatch.setattr(runner, "SYSTEMS", systems)
+    from langmem_eval.registry import Method
+    systems = {name: Method(lambda model: None, "test", "none") for name in ("good", "bad")}
+    monkeypatch.setattr(runner, "discover_methods", lambda: systems)
+    monkeypatch.setattr(runner, "run_method", lambda name, *a, **kw: {"good": good, "bad": bad}[name](*a, **kw))
     monkeypatch.setattr(runner, "start", lambda: None)
     monkeypatch.setattr("sys.argv", ["eval", "--systems", "good,bad", "--skip-judge",
                                     "--data-file", str(data), "--output-dir", str(tmp_path)])

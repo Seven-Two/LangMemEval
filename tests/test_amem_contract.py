@@ -70,9 +70,7 @@ def no_network(monkeypatch):
 
 def test_discovery_is_lazy():
     from langmem_eval.registry import discover_methods
-    from agents_memory.systems import SYSTEMS
     assert "amem" in discover_methods()
-    assert "amem" in SYSTEMS
 
 
 def test_turn_granularity_dates_duplicate_content_and_no_future_input():

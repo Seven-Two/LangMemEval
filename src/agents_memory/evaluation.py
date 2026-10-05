@@ -253,8 +253,7 @@ def evaluate_longmemeval(
 def evaluate_with_judge(question: str, expected: str, predicted: str) -> dict:
     """3-dimension LLM-as-judge evaluation (relevant / complete / accurate).
 
-    Uses the same JUDGE_PROMPT as evaluate_retrieval so every benchmark
-    (SimpleMem, Mem0, Memory-R1) produces comparable scores.
+    Applies the shared JUDGE_PROMPT to answers from the unified evaluator.
 
     Returns:
         dict with judge_relevant, judge_complete, judge_accurate (0 or 1)

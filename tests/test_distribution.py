@@ -17,10 +17,17 @@ def test_wheel_runner_outside_checkout(tmp_path):
                    "langmem_eval/_amem_prompts.py", "agents_memory/token_tracker.py",
                    "agents_memory/systems/langmem.py"}
         assert removed.isdisjoint(archive.namelist())
+        assert not any(name.startswith("agents_memory/systems/") for name in archive.namelist())
+        assert not any(name.startswith("agents_memory/training/") for name in archive.namelist())
         for name in ("agents_memory/runner.py", "agents_memory/paths.py", "agents_memory/LICENSE",
                      "agents_memory/NOTICE", "langmem_eval/cli.py", "langmem_eval/lifecycle.py",
                      "langmem_eval/methods/amem/evolution.py", "langmem_eval/methods/amem/responses.py"):
             assert name in archive.namelist()
+        for method in ("amem", "langmem"):
+            assert f"langmem_eval/methods/{method}/backend.py" in archive.namelist()
+        packaged_methods = {name.split('/')[2] for name in archive.namelist()
+                            if name.startswith('langmem_eval/methods/') and name.endswith('/backend.py')}
+        assert packaged_methods == {"amem", "langmem"}
         archive.extractall(tmp_path)
     env = dict(os.environ)
     env.pop("PYTHONPATH", None)

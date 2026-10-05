@@ -10,7 +10,7 @@
 ```bash
 git clone https://github.com/Seven-Two/LangMemEval.git
 cd LangMemEval
-uv sync --locked --extra dev
+uv sync --locked --extra dev --extra amem
 uv run pytest -q
 uv run langmem-eval --list-methods
 ```
@@ -27,15 +27,16 @@ uv run langmem-eval --systems langmem --benchmark locomo --num-samples 1 --llm-m
 `--empty-context` 等显式协议配置，逐题保存实际上下文和提示词。
 运行前固定题目清单，失败样本保留在结果中；不完整运行保存结果后返回退出码 2。
 成本按阶段报告，裁判独立统计；未观测到的费用标记为未知。
-原生 baseline 保留自身协议，结果会明确区分，详见 [实验配置与成本记录](docs/development.md)。
+当前只内置 `amem` 和 `langmem`，通过同一个 `ingest/retrieve` 接口，共用回答器、证据预算和评分流程。
+原有独立回答入口已删除；接口和扩展方式见 [统一方法说明](docs/unified-methods.md)。
 
 根目录 `.env` 可填写 `OPENAI_API_KEY=...`。参数优先级为：命令行 > `.env` > 进程环境变量 > 默认值。
 聊天使用 `--llm-model`、`--llm-base-url`，嵌入使用 `--embedding-provider`、`--embedding-model` 等。
-A-Mem 和 LangMem 共用 `EMBEDDING_*`；运行 `uv run langmem-eval --systems amem --show-config`
+A-Mem 和 LangMem 共用 `EMBEDDING_*`。
+运行 `uv run langmem-eval --systems amem --show-config`
 查看脱敏后的最终配置，不调用模型。完整参数表见 [统一配置](docs/configuration.md)。
-额外 baseline 按需安装，例如 `uv sync --extra dev --extra mem0`。
-可选组：`amem`、`mem0`、`simplemem`、`graphiti`、`memu`、`charts`、`training`。
-这些组已纳入统一依赖解析，但未逐个运行；默认安装仅验证 LangMem 评测流程。
+可选组：`dev`（测试）、`amem`（本地 embedding）、`aml`（赛事服务）、`charts`（绘图依赖）。
+其他研究方法需要按实验需求另行实现和注册，不会随框架自动接入。
 
 ## 目录与开发
 
@@ -52,11 +53,15 @@ uv run --extra amem langmem-eval --systems amem --data-file examples/amem_smoke.
 上述命令会调用真实模型。配置千问兼容服务、API embedding、离线验收与复现差异见
 [A-Mem 使用指南](docs/amem.md)。未运行论文规模实验，不声称复现论文分数。
 
+完整历史写入耗时较长时，首次运行增加 `--amem-cache-mode reuse`，保存完整笔记和向量。
+后续调整 `--top-k` 或回答预算时使用 `--amem-cache-mode require`，命中后跳过历史写入；
+默认缓存关闭。模式、失效条件和成本口径见 [记忆缓存说明](docs/amem.md#复用已经构建的记忆避免重复写入)。
+
 AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 安装 `uv sync --extra dev --extra aml`，配置 `.env` 后运行 `uv run langmem-aml`。
 
 - `src/langmem_eval/`：整合代码与方法注册机制。
-- `src/agents_memory/`：数据加载、baseline、评测、成本统计与实验运行器。
+- `src/agents_memory/`：数据加载、评测、成本统计和实验运行器。
 - `tests/`：测试；根目录 pyproject.toml 与 uv.lock 统一管理依赖。
 - `scripts/`：抽样和离线验收工具；评测使用 `langmem-eval`，实验主体在 `agents_memory.runner`。
 - `third_party/memeval/`：上游许可证、来源文档与示例图，不是第二套运行项目。
@@ -66,6 +71,7 @@ AML 比赛文本赛道 Add/Search 接入见 [AML 服务指南](docs/aml.md)。
 详见 [使用与注册新方法](docs/development.md)。单个项目采用可编辑安装；
 修改代码后重启评测即可，所有命令均在仓库根目录运行。
 模块边界、方法参数注册、资源生命周期与论文实验注意事项见 [架构说明](docs/architecture.md)。
+第一次阅读源码建议从 [源码阅读教程](docs/code-reading-guide.md) 开始：包含完整调用链、A-Mem 逐步解析、结果排查和无需真实模型的动手练习。
 
 源码已统一到根目录 `src/`，不再有嵌套的 `MemEval/` 或 `LangMemEval/` 项目。
 从旧布局更新后运行 `uv sync --locked --extra dev`，刷新可编辑安装的包路径；

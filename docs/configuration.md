@@ -97,18 +97,28 @@ A-Mem 专属算法设置仍保留 `AMEM_` 前缀，例如
 `--amem-response-format` / `AMEM_RESPONSE_FORMAT`、`--amem-temperature` / `AMEM_TEMPERATURE`、
 `--amem-max-output-tokens` / `AMEM_MAX_OUTPUT_TOKENS`。
 
+完整历史记忆缓存用 `--amem-cache-mode` / `AMEM_CACHE_MODE` 配置，默认 `off`：
+`reuse` 命中则复用、未命中则构建保存；`require` 未命中就失败；`refresh` 强制重建。
+目录用 `--amem-cache-dir` / `AMEM_CACHE_DIR`，默认相对工作目录的 `data/amem-cache`。
+不自动跟随输出目录或 `EVAL_DATA_DIR`。LangMem 当前没有此缓存实现。
+完整说明见 [A-Mem 缓存](amem.md#复用已经构建的记忆避免重复写入)。
+
 ## 旧配置迁移与范围
 
 把旧 `.env` 中 `AMEM_EMBEDDING_*` 改为 `EMBEDDING_*`，
 `AMEM_DEVICE` 改为 `EMBEDDING_DEVICE`，`AMEM_LOCAL_FILES_ONLY` 改为 `EMBEDDING_LOCAL_FILES_ONLY`。
 程序发现旧名称会明确提示迁移，不静默忽略。聊天密钥仍用 `OPENAI_API_KEY`，无需改名。
 
-共享 embedding 适用于本项目注册方法中的 A-Mem、LangMem；其他 MemEval 原生 baseline
-仍可能使用各自的 embedding 服务，不应假定它们已全部统一。选择原生 baseline 时显式传入
-`--embedding-*` 会报错，避免参数被静默忽略；其 `.env` 仍按各自适配器读取。
+当前内置方法只有 A-Mem 和 LangMem，均使用共享 embedding。
+`--show-config` 的 `embedding_scope` 和结果同名字段均标记为 `shared`。
 新方法可直接用 `EmbeddingSettings.from_env()` 和 `create_embedder(settings)` 获取共享配置与客户端。
 `AML_*` 属于独立的比赛服务，当前请求没有更改其配置协议；不能用它们配置 baseline。
 结果中的 `config.models` 保存共享模型配置（已脱敏），便于确认实验实际使用的设置。
+
+所有方法的最终回答都使用 `LLM_MODEL` 和 `EVAL_*`。记忆内部的提示词、输出预算、
+采样参数仍属于算法/SDK 配置；共享回答预算不会自动覆盖内部抽取调用。
+`LLM_EXTRA_BODY` 用于共享回答器及 A-Mem、LangMem 的聊天调用，不自动应用于裁判。
+接口和扩展方式见 [统一方法说明](unified-methods.md)。
 
 ## 运行日志与进度
 
@@ -121,6 +131,8 @@ A-Mem 专属算法设置仍保留 `AMEM_` 前缀，例如
 - `dataset.load` / `tokenizer.load`：数据和分词器加载。
 - `backend.initialize` / `embedding.load`：方法初始化、嵌入模型名称和实际设备。
 - `write.plan` / `write.session` / `write.progress`：历史会话和消息数量、完成进度。
+- `write.finalize`：批量方法将已暂存的历史真正写入 SDK；进度条 ingest 完成不代表此阶段结束。
+- `write.cache.load/save`、`amem.cache.hit/miss/saved/refresh`：完整记忆缓存加载、保存及命中状态。
 - A-Mem 的 `amem.write.note`、`amem.analyze`、`amem.neighbors`、`amem.evolve`：
   每条历史消息的分析、邻居检索、演化；记录已保存记忆数量和索引重建。
 - `embedding.encode` / `embedding.api`：本地嵌入和远程嵌入批次。
@@ -147,8 +159,8 @@ tail -f results/amem-locomo-first/run_<运行标识>.log
 日志主动记录阶段元数据，不输出 API 密钥、请求头、请求体或对话/问题正文；实际回答
 上下文仍保存在结果 JSON 中。第三方库的原始进度条不是这个日志文件的内容；异常文本
 来自第三方时可能包含其请求信息，分享日志前应检查。
-细粒度记忆日志覆盖统一适配器（A-Mem、LangMem），其中 A-Mem 额外提供逐消息子步骤。
-原生 baseline 的内部写入流程仍由各自实现控制，框架记录其对话边界及共享问答/裁判阶段。
+所有方法都记录统一写入、检索、回答和裁判阶段，A-Mem 额外提供逐消息子步骤。
+第三方 SDK 的内部步骤不一定逐条可见；框架阶段日志不等于完整 SDK 日志。
 
 扩展新方法时，可以直接使用统一日志接口：
 

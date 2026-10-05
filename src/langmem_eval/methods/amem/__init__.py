@@ -16,6 +16,11 @@ def public_config():
                      MethodOption("amem-evolution-threshold", "AMEM_EVOLUTION_THRESHOLD", int),
                      MethodOption("amem-temperature", "AMEM_TEMPERATURE", float),
                      MethodOption("amem-max-output-tokens", "AMEM_MAX_OUTPUT_TOKENS", int),
+                     MethodOption("amem-cache-mode", "AMEM_CACHE_MODE",
+                                  choices=("off", "reuse", "refresh", "require"),
+                                  help="Reuse completed A-Mem history; default off. require fails on cache miss."),
+                     MethodOption("amem-cache-dir", "AMEM_CACHE_DIR",
+                                  help="Completed memory cache directory; default data/amem-cache"),
                  ))
 def create(model):
     from .backend import AMemBackend
